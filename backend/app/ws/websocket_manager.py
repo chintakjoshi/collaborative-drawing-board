@@ -4,6 +4,7 @@ import secrets
 import string
 import time
 from typing import Dict, List, Optional, Set
+from dataclasses import asdict
 from fastapi import WebSocket
 from ..core.board_room import BoardRoom, UserRole, Stroke, Point, ToolType
 from ..core.shapes import Shape, TextObject, EraserEngine, GeometryUtils
@@ -27,17 +28,21 @@ class WebSocketManager:
     async def create_board(self, ws: WebSocket) -> dict:
         """Create a new board and return admin info"""
         board_id = await self.generate_join_code()
-        admin_id = str(len(self.boards) + 1)
+        admin_id = secrets.token_urlsafe(16)  # Use secure random ID
         admin_token = secrets.token_urlsafe(32)
         
+        # Create board
         board = BoardRoom(board_id, admin_id)
         self.boards[board_id] = board
+        
+        # Initialize connections dict for this board
         self.active_connections[board_id] = {}
         
         # Generate admin nickname
-        admin_nickname = f"User{admin_id}"
+        admin_nickname = f"Admin{board_id[:4]}"
         board.add_user(admin_id, admin_nickname, UserRole.ADMIN)
         
+        # Store token
         self.connection_tokens[admin_id] = admin_token
         
         return {
@@ -45,24 +50,37 @@ class WebSocketManager:
             "user_id": admin_id,
             "token": admin_token,
             "nickname": admin_nickname,
-            "role": "admin"
+            "role": "admin",
+            "board_state": board.to_dict()
         }
         
-    async def join_board(self, board_id: str, ws: WebSocket) -> Optional[dict]:
+    async def join_board(self, board_id: str, ws: WebSocket, token: str = None) -> Optional[dict]:
         """Join existing board as user"""
         if board_id not in self.boards:
             return None
             
         board = self.boards[board_id]
-        user_id = str(len(board.users) + 1)
-        nickname = f"User{user_id}"
         
+        # Check if token is banned
+        if token and token in board.banned_tokens:
+            return {"error": "banned"}
+        
+        # Generate user info
+        user_id = secrets.token_urlsafe(16)  # Use secure random ID
+        nickname = f"User{len(board.users) + 1}"
+        
+        # Try to add user
         if not board.add_user(user_id, nickname):
+            # Check specific reason
+            if len(board.users) >= board.max_users:
+                return {"error": "full"}
+            if user_id in board.timeouts and board.timeouts[user_id] > time.time():
+                return {"error": "timeout"}
             return None
             
         # Generate token for this user
-        token = secrets.token_urlsafe(32)
-        self.connection_tokens[user_id] = token
+        user_token = secrets.token_urlsafe(32)
+        self.connection_tokens[user_id] = user_token
         
         # Store connection
         self.active_connections[board_id][user_id] = ws
@@ -72,44 +90,40 @@ class WebSocketManager:
             "type": "user_joined",
             "user_id": user_id,
             "nickname": nickname,
-            "timestamp": asyncio.get_event_loop().time()
+            "timestamp": time.time()
         }, exclude_user=user_id)
         
         return {
             "board_id": board_id,
             "user_id": user_id,
-            "token": token,
+            "token": user_token,
             "nickname": nickname,
             "role": "user",
-            "board_state": {
-                "users": [{"id": u.id, "nickname": u.nickname} for u in board.users.values()],
-                "layers": board.layers,
-                "object_count": board.object_count
-            }
+            "board_state": board.to_dict()
         }
         
     async def handle_drawing(self, board_id: str, user_id: str, data: dict):
-        """Handle drawing events"""
+        """Handle all drawing and interaction events"""
         board = self.boards.get(board_id)
         if not board or user_id not in board.users:
             return
             
         event_type = data.get("type")
         
+        # ============= STROKE EVENTS =============
         if event_type == "stroke_start":
-            # Handle new stroke
             stroke_id = data.get("stroke_id")
             stroke_data = data.get("stroke")
             
             stroke = Stroke(
                 id=stroke_id,
                 user_id=user_id,
-                layer_id=stroke_data["layer_id"],
-                brush_type=stroke_data["brush_type"],
-                color=stroke_data["color"],
-                width=stroke_data["width"],
+                layer_id=stroke_data.get("layer_id", "default"),
+                brush_type=stroke_data.get("brush_type", "pen"),
+                color=stroke_data.get("color", "#000000"),
+                width=stroke_data.get("width", 5),
                 points=[],
-                created_at=asyncio.get_event_loop().time()
+                created_at=time.time()
             )
             
             if board.add_stroke(stroke):
@@ -117,29 +131,160 @@ class WebSocketManager:
                     "type": "stroke_start",
                     "stroke_id": stroke_id,
                     "user_id": user_id,
-                    "stroke": stroke_data,
-                    "timestamp": asyncio.get_event_loop().time()
+                    "stroke": {
+                        "layer_id": stroke.layer_id,
+                        "brush_type": stroke.brush_type,
+                        "color": stroke.color,
+                        "width": stroke.width
+                    },
+                    "timestamp": time.time()
                 }, exclude_user=user_id)
+            else:
+                # Send error - object limit reached
+                if board_id in self.active_connections and user_id in self.active_connections[board_id]:
+                    await self.active_connections[board_id][user_id].send_json({
+                        "type": "error",
+                        "message": "Object limit reached (5000 maximum)"
+                    })
                 
         elif event_type == "stroke_points":
-            # Batch of points
+            stroke_id = data.get("stroke_id")
             points_data = data.get("points", [])
-            points = [Point(x=p["x"], y=p["y"], pressure=p.get("pressure", 0.5)) 
-                     for p in points_data]
             
             # Rate limit check
-            if not board.check_rate_limit(user_id, len(points)):
+            if not board.check_rate_limit(user_id, len(points_data)):
+                # Send warning
+                if board_id in self.active_connections and user_id in self.active_connections[board_id]:
+                    await self.active_connections[board_id][user_id].send_json({
+                        "type": "rate_limit_warning",
+                        "message": "Slow down! You're sending too many points."
+                    })
                 return
-                
+            
+            # Add points to the stroke in board state
+            if stroke_id and stroke_id in board.strokes:
+                stroke = board.strokes[stroke_id]
+                stroke.points.extend([
+                    Point(x=p["x"], y=p["y"], pressure=p.get("pressure", 0.5), timestamp=p.get("timestamp", time.time()))
+                    for p in points_data
+                ])
+            
             await self.broadcast_to_board(board_id, {
                 "type": "stroke_points",
                 "user_id": user_id,
+                "stroke_id": stroke_id,
                 "points": points_data,
-                "timestamp": asyncio.get_event_loop().time()
+                "timestamp": time.time()
             }, exclude_user=user_id)
             
+        elif event_type == "stroke_end":
+            stroke_id = data.get("stroke_id")
+            await self.broadcast_to_board(board_id, {
+                "type": "stroke_end",
+                "stroke_id": stroke_id,
+                "user_id": user_id,
+                "timestamp": time.time()
+            }, exclude_user=user_id)
+        
+        # ============= SHAPE EVENTS =============
+        elif event_type == "shape_create":
+            shape_data = data.get("shape")
+            shape_id = f"shape_{int(time.time() * 1000)}_{user_id}"
+            
+            # Note: For now we'll store in a separate tracking until we fix the data model
+            # This is a temporary solution - Issue #5 will properly separate this
+            if board.object_count >= board.max_objects:
+                if board_id in self.active_connections and user_id in self.active_connections[board_id]:
+                    await self.active_connections[board_id][user_id].send_json({
+                        "type": "error",
+                        "message": "Object limit reached (5000 maximum)"
+                    })
+                return
+            
+            board.object_count += 1
+            
+            await self.broadcast_to_board(board_id, {
+                "type": "shape_create",
+                "shape_id": shape_id,
+                "user_id": user_id,
+                "shape": {
+                    "type": shape_data.get("type"),
+                    "start_x": shape_data.get("startX", shape_data.get("start_x")),
+                    "start_y": shape_data.get("startY", shape_data.get("start_y")),
+                    "end_x": shape_data.get("endX", shape_data.get("end_x")),
+                    "end_y": shape_data.get("endY", shape_data.get("end_y")),
+                    "color": shape_data.get("color", "#000000"),
+                    "stroke_width": shape_data.get("strokeWidth", shape_data.get("stroke_width", 5)),
+                    "layer_id": shape_data.get("layer_id", "default")
+                },
+                "timestamp": time.time()
+            })
+                
+        # ============= TEXT EVENTS =============
+        elif event_type == "text_create":
+            text_data = data.get("text")
+            text_id = f"text_{int(time.time() * 1000)}_{user_id}"
+            
+            if board.object_count >= board.max_objects:
+                if board_id in self.active_connections and user_id in self.active_connections[board_id]:
+                    await self.active_connections[board_id][user_id].send_json({
+                        "type": "error",
+                        "message": "Object limit reached (5000 maximum)"
+                    })
+                return
+            
+            board.object_count += 1
+            
+            await self.broadcast_to_board(board_id, {
+                "type": "text_create",
+                "text_id": text_id,
+                "user_id": user_id,
+                "text": {
+                    "text": text_data.get("text", ""),
+                    "x": text_data.get("x", 0),
+                    "y": text_data.get("y", 0),
+                    "color": text_data.get("color", "#000000"),
+                    "layer_id": text_data.get("layer_id", "default"),
+                    "font_size": text_data.get("font_size", 16),
+                    "font_family": text_data.get("font_family", "Arial")
+                },
+                "timestamp": time.time()
+            })
+                
+        # ============= ERASER EVENTS =============
+        elif event_type == "erase_path":
+            eraser_points = data.get("points", [])
+            
+            # Find and delete strokes that intersect with eraser path
+            strokes_to_delete = []
+            for stroke_id, stroke in list(board.strokes.items()):
+                for eraser_point in eraser_points:
+                    for stroke_point in stroke.points:
+                        if GeometryUtils.point_distance(
+                            stroke_point.x, stroke_point.y,
+                            eraser_point["x"], eraser_point["y"]
+                        ) <= self.eraser_engine.eraser_width:
+                            strokes_to_delete.append(stroke_id)
+                            break
+                    if stroke_id in strokes_to_delete:
+                        break
+            
+            # Broadcast deletions
+            for stroke_id in strokes_to_delete:
+                await self.broadcast_to_board(board_id, {
+                    "type": "object_delete",
+                    "object_id": stroke_id,
+                    "object_type": "stroke",
+                    "user_id": user_id,
+                    "timestamp": time.time()
+                })
+                # Remove from board state
+                if stroke_id in board.strokes:
+                    del board.strokes[stroke_id]
+                    board.object_count -= 1
+                    
+        # ============= CURSOR EVENTS =============
         elif event_type == "cursor_update":
-            # Update cursor position
             user = board.users.get(user_id)
             if user:
                 user.cursor_x = data.get("x", 0)
@@ -152,7 +297,7 @@ class WebSocketManager:
                     "x": user.cursor_x,
                     "y": user.cursor_y,
                     "tool": user.active_tool,
-                    "timestamp": asyncio.get_event_loop().time()
+                    "timestamp": time.time()
                 }, exclude_user=user_id)
                 
     async def broadcast_to_board(self, board_id: str, message: dict, exclude_user: str = None):
@@ -160,12 +305,13 @@ class WebSocketManager:
         if board_id not in self.active_connections:
             return
             
-        for user_id, connection in self.active_connections[board_id].items():
+        for user_id, connection in list(self.active_connections[board_id].items()):
             if user_id != exclude_user:
                 try:
                     await connection.send_json(message)
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Error broadcasting to user {user_id}: {e}")
+                    # Connection might be dead, will be cleaned up on disconnect
                     
     async def disconnect(self, board_id: str, user_id: str):
         """Handle user disconnection"""
@@ -180,8 +326,13 @@ class WebSocketManager:
         await self.broadcast_to_board(board_id, {
             "type": "user_left",
             "user_id": user_id,
-            "timestamp": asyncio.get_event_loop().time()
+            "timestamp": time.time()
         })
+        
+        # Check if board is empty
+        if board_id in self.boards and len(self.boards[board_id].users) == 0:
+            # Optional: cleanup empty boards after some time
+            pass
         
     def cleanup_board(self, board_id: str):
         """Cleanup board after session ends"""
@@ -189,161 +340,3 @@ class WebSocketManager:
             del self.boards[board_id]
         if board_id in self.active_connections:
             del self.active_connections[board_id]
-
-    async def handle_drawing(self, board_id: str, user_id: str, data: dict):
-        """Handle drawing events"""
-        board = self.boards.get(board_id)
-        if not board or user_id not in board.users:
-            return
-            
-        event_type = data.get("type")
-        
-        if event_type == "stroke_start":
-            stroke_id = data.get("stroke_id")
-            stroke_data = data.get("stroke")
-            
-            stroke = Stroke(
-                id=stroke_id,
-                user_id=user_id,
-                layer_id=stroke_data["layer_id"],
-                brush_type=stroke_data["brush_type"],
-                color=stroke_data["color"],
-                width=stroke_data["width"],
-                points=[],
-                created_at=time.time()
-            )
-            
-            if board.add_stroke(stroke):
-                await self.broadcast_to_board(board_id, {
-                    "type": "stroke_start",
-                    "stroke_id": stroke_id,
-                    "user_id": user_id,
-                    "stroke": stroke_data,
-                    "timestamp": time.time()
-                }, exclude_user=user_id)
-                
-        elif event_type == "stroke_points":
-            points_data = data.get("points", [])
-            
-            # Rate limit check
-            if not board.check_rate_limit(user_id, len(points_data)):
-                return
-                
-            # Add points to the stroke in board state
-            stroke_id = data.get("stroke_id")
-            if stroke_id and stroke_id in board.strokes:
-                stroke = board.strokes[stroke_id]
-                stroke.points.extend([
-                    Point(x=p["x"], y=p["y"], pressure=p.get("pressure", 0.5))
-                    for p in points_data
-                ])
-            
-            await self.broadcast_to_board(board_id, {
-                "type": "stroke_points",
-                "user_id": user_id,
-                "stroke_id": stroke_id,
-                "points": points_data,
-                "timestamp": time.time()
-            }, exclude_user=user_id)
-            
-        elif event_type == "shape_create":
-            shape_data = data.get("shape")
-            shape_id = f"shape_{int(time.time() * 1000)}_{user_id}"
-            
-            shape = Shape(
-                id=shape_id,
-                user_id=user_id,
-                layer_id=shape_data["layer_id"],
-                type=shape_data["type"],
-                start_x=shape_data["start_x"],
-                start_y=shape_data["start_y"],
-                end_x=shape_data["end_x"],
-                end_y=shape_data["end_y"],
-                color=shape_data["color"],
-                stroke_width=shape_data["stroke_width"],
-                fill_color=shape_data.get("fill_color"),
-                created_at=time.time()
-            )
-            
-            if board.add_stroke(shape):  # Reusing add_stroke for now
-                await self.broadcast_to_board(board_id, {
-                    "type": "shape_create",
-                    "shape_id": shape_id,
-                    "user_id": user_id,
-                    "shape": asdict(shape),
-                    "timestamp": time.time()
-                })
-                
-        elif event_type == "text_create":
-            text_data = data.get("text")
-            text_id = f"text_{int(time.time() * 1000)}_{user_id}"
-            
-            text_obj = TextObject(
-                id=text_id,
-                user_id=user_id,
-                layer_id=text_data["layer_id"],
-                text=text_data["text"],
-                x=text_data["x"],
-                y=text_data["y"],
-                color=text_data["color"],
-                font_size=text_data.get("font_size", 16),
-                font_family=text_data.get("font_family", "Arial"),
-                created_at=time.time()
-            )
-            
-            if board.add_stroke(text_obj):  # Reusing add_stroke for now
-                await self.broadcast_to_board(board_id, {
-                    "type": "text_create",
-                    "text_id": text_id,
-                    "user_id": user_id,
-                    "text": asdict(text_obj),
-                    "timestamp": time.time()
-                })
-                
-        elif event_type == "erase_path":
-            eraser_points = data.get("points", [])
-            user_strokes = [s for s in board.strokes.values() if s.user_id != user_id]
-            
-            # Find strokes to cut/delete
-            strokes_to_cut = []
-            for stroke in user_strokes:
-                for eraser_point in eraser_points:
-                    for stroke_point in stroke.points:
-                        if GeometryUtils.point_distance(
-                            stroke_point.x, stroke_point.y,
-                            eraser_point["x"], eraser_point["y"]
-                        ) <= self.eraser_engine.eraser_width:
-                            strokes_to_cut.append(stroke)
-                            break
-                    if stroke in strokes_to_cut:
-                        break
-            
-            # Broadcast erase events
-            for stroke in strokes_to_cut:
-                await self.broadcast_to_board(board_id, {
-                    "type": "object_delete",
-                    "object_id": stroke.id,
-                    "object_type": "stroke",
-                    "user_id": user_id,
-                    "timestamp": time.time()
-                })
-                # Remove from board state
-                if stroke.id in board.strokes:
-                    del board.strokes[stroke.id]
-                    board.object_count -= 1
-                    
-        elif event_type == "cursor_update":
-            user = board.users.get(user_id)
-            if user:
-                user.cursor_x = data.get("x", 0)
-                user.cursor_y = data.get("y", 0)
-                user.active_tool = data.get("tool", "pen")
-                
-                await self.broadcast_to_board(board_id, {
-                    "type": "cursor_update",
-                    "user_id": user_id,
-                    "x": user.cursor_x,
-                    "y": user.cursor_y,
-                    "tool": user.active_tool,
-                    "timestamp": time.time()
-                }, exclude_user=user_id)
