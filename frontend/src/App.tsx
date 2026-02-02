@@ -12,14 +12,14 @@ import { FiSettings, FiUsers, FiLayers, FiAlertCircle } from 'react-icons/fi';
 interface Shape {
   id: string;
   type: string;
-  startX: number;
-  startY: number;
-  endX: number;
-  endY: number;
+  start_x: number;
+  start_y: number;
+  end_x: number;
+  end_y: number;
   color: string;
-  strokeWidth: number;
-  layerId: string;
-  userId: string;
+  stroke_width: number;
+  layer_id: string;
+  user_id: string;
 }
 
 interface TextObject {
@@ -28,10 +28,10 @@ interface TextObject {
   x: number;
   y: number;
   color: string;
-  layerId: string;
-  userId: string;
-  fontSize: number;
-  fontFamily: string;
+  layer_id: string;
+  user_id: string;
+  font_size: number;
+  font_family: string;
 }
 
 function App() {
@@ -68,13 +68,13 @@ function App() {
     disconnect,
     sendStrokeStart,
     sendStrokePoints,
+    sendStrokeEnd,
     sendShapeCreate,
     sendTextCreate,
     sendErasePath,
     sendCursorUpdate,
     sendUndo,
     sendRedo,
-    sendStrokeEnd,
     isConnected,
     canUndo,
     canRedo
@@ -84,18 +84,81 @@ function App() {
   function handleWebSocketMessage(message: any) {
     switch (message.type) {
       case 'welcome':
+        console.log('Welcome message received:', message);
         setUserId(message.user_id);
         setBoardId(message.board_id);
         setIsAdmin(message.role === 'admin');
-        setUsers(message.board_state?.users || []);
-        setObjectCount(message.board_state?.object_count || 0);
-
-        // Start admin disconnect timer if admin is not connected
-        if (message.role === 'user' && !message.board_state?.admin_online) {
-          const disconnectTime = message.board_state?.admin_disconnected_at;
-          if (disconnectTime) {
-            const timeLeft = Math.max(0, 600 - (Date.now() - disconnectTime) / 1000);
-            setAdminDisconnectTimer(Math.floor(timeLeft));
+        
+        // Initialize from board state
+        if (message.board_state) {
+          const boardState = message.board_state;
+          
+          // Set users
+          setUsers(boardState.users || []);
+          
+          // Set object count
+          setObjectCount(boardState.object_count || 0);
+          
+          // Initialize strokes from board state
+          if (boardState.strokes && Array.isArray(boardState.strokes)) {
+            const initialStrokes: Stroke[] = boardState.strokes.map((s: any) => ({
+              id: s.id,
+              userId: s.user_id,
+              layerId: s.layer_id,
+              brushType: s.brush_type,
+              color: s.color,
+              width: s.width,
+              points: s.points.map((p: any) => ({
+                x: p.x,
+                y: p.y,
+                pressure: p.pressure || 0.5,
+                timestamp: p.timestamp || 0
+              })),
+              createdAt: s.created_at
+            }));
+            setStrokes(initialStrokes);
+          }
+          
+          // Initialize shapes from board state
+          if (boardState.shapes && Array.isArray(boardState.shapes)) {
+            const initialShapes: Shape[] = boardState.shapes.map((s: any) => ({
+              id: s.id,
+              type: s.type,
+              start_x: s.start_x,
+              start_y: s.start_y,
+              end_x: s.end_x,
+              end_y: s.end_y,
+              color: s.color,
+              stroke_width: s.stroke_width,
+              layer_id: s.layer_id,
+              user_id: s.user_id
+            }));
+            setShapes(initialShapes);
+          }
+          
+          // Initialize texts from board state
+          if (boardState.texts && Array.isArray(boardState.texts)) {
+            const initialTexts: TextObject[] = boardState.texts.map((t: any) => ({
+              id: t.id,
+              text: t.text,
+              x: t.x,
+              y: t.y,
+              color: t.color,
+              layer_id: t.layer_id,
+              user_id: t.user_id,
+              fontSize: t.font_size || 16,
+              fontFamily: t.font_family || 'Arial'
+            }));
+            setTextObjects(initialTexts);
+          }
+          
+          // Start admin disconnect timer if admin is not connected
+          if (message.role === 'user' && !boardState.admin_online) {
+            const disconnectTime = boardState.admin_disconnected_at;
+            if (disconnectTime) {
+              const timeLeft = Math.max(0, 600 - (Date.now() / 1000 - disconnectTime));
+              setAdminDisconnectTimer(Math.floor(timeLeft));
+            }
           }
         }
         break;
@@ -121,7 +184,8 @@ function App() {
         setUsers(prev => prev.filter(u => u.id !== message.user_id));
 
         // Check if admin left
-        if (message.user_id === users.find(u => u.role === 'admin')?.id) {
+        const wasAdmin = users.find(u => u.id === message.user_id)?.role === 'admin';
+        if (wasAdmin) {
           setAdminDisconnectTimer(600); // 10 minutes in seconds
         }
         break;
@@ -168,14 +232,14 @@ function App() {
         const newShape: Shape = {
           id: message.shape_id,
           type: message.shape.type,
-          startX: message.shape.start_x,
-          startY: message.shape.start_y,
-          endX: message.shape.end_x,
-          endY: message.shape.end_y,
+          start_x: message.shape.start_x,
+          start_y: message.shape.start_y,
+          end_x: message.shape.end_x,
+          end_y: message.shape.end_y,
           color: message.shape.color,
-          strokeWidth: message.shape.stroke_width,
-          layerId: message.shape.layer_id,
-          userId: message.user_id
+          stroke_width: message.shape.stroke_width,
+          layer_id: message.shape.layer_id,
+          user_id: message.user_id
         };
         setShapes(prev => [...prev, newShape]);
         setObjectCount(prev => prev + 1);
@@ -188,17 +252,20 @@ function App() {
           x: message.text.x,
           y: message.text.y,
           color: message.text.color,
-          layerId: message.text.layer_id,
-          userId: message.user_id,
-          fontSize: message.text.font_size || 16,
-          fontFamily: message.text.font_family || 'Arial'
+          layer_id: message.text.layer_id,
+          user_id: message.user_id,
+          font_size: message.text.font_size || 16,
+          font_family: message.text.font_family || 'Arial'
         };
         setTextObjects(prev => [...prev, newText]);
         setObjectCount(prev => prev + 1);
         break;
 
       case 'object_delete':
-        setStrokes(prev => prev.filter(stroke => stroke.id !== message.object_id));
+        // Delete from appropriate array based on object_type
+        if (message.object_type === 'stroke' || !message.object_type) {
+          setStrokes(prev => prev.filter(stroke => stroke.id !== message.object_id));
+        }
         setShapes(prev => prev.filter(shape => shape.id !== message.object_id));
         setTextObjects(prev => prev.filter(text => text.id !== message.object_id));
         setObjectCount(prev => Math.max(0, prev - 1));
@@ -236,6 +303,13 @@ function App() {
 
       case 'error':
         console.error('WebSocket error:', message.message);
+        if (message.message.includes('Object limit')) {
+          setShowLimitWarning(true);
+        }
+        break;
+        
+      case 'rate_limit_warning':
+        console.warn('Rate limit warning:', message.message);
         break;
     }
   }
@@ -291,12 +365,12 @@ function App() {
     if (currentTool === 'eraser') {
       currentEraserPoints.current = [];
     }
-
-    // FIX: Send stroke end event
+    
+    // Send stroke end event
     if (currentStrokeId.current) {
       sendStrokeEnd?.(currentStrokeId.current);
     }
-
+    
     currentStrokeId.current = null;
   }, [currentTool, sendStrokeEnd]);
 
@@ -398,12 +472,12 @@ function App() {
   });
 
   const visibleShapes = shapes.filter(shape => {
-    const layer = layers.find(l => l.id === shape.layerId);
+    const layer = layers.find(l => l.id === shape.layer_id);
     return layer && !layer.hidden;
   });
 
   const visibleTextObjects = textObjects.filter(text => {
-    const layer = layers.find(l => l.id === text.layerId);
+    const layer = layers.find(l => l.id === text.layer_id);
     return layer && !layer.hidden;
   });
 
@@ -546,7 +620,7 @@ function App() {
                 </div>
               </div>
 
-              {adminDisconnectTimer !== null && (
+              {adminDisconnectTimer !== null && adminDisconnectTimer > 0 && (
                 <div className="bg-red-50 px-3 py-1 rounded-lg">
                   <div className="text-xs text-red-600">Admin Left</div>
                   <div className="font-semibold text-red-700">

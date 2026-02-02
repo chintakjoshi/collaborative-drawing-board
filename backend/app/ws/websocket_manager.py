@@ -141,11 +141,10 @@ class WebSocketManager:
                 }, exclude_user=user_id)
             else:
                 # Send error - object limit reached
-                if board_id in self.active_connections and user_id in self.active_connections[board_id]:
-                    await self.active_connections[board_id][user_id].send_json({
-                        "type": "error",
-                        "message": "Object limit reached (5000 maximum)"
-                    })
+                await self._send_to_user(board_id, user_id, {
+                    "type": "error",
+                    "message": "Object limit reached (5000 maximum)"
+                })
                 
         elif event_type == "stroke_points":
             stroke_id = data.get("stroke_id")
@@ -154,11 +153,10 @@ class WebSocketManager:
             # Rate limit check
             if not board.check_rate_limit(user_id, len(points_data)):
                 # Send warning
-                if board_id in self.active_connections and user_id in self.active_connections[board_id]:
-                    await self.active_connections[board_id][user_id].send_json({
-                        "type": "rate_limit_warning",
-                        "message": "Slow down! You're sending too many points."
-                    })
+                await self._send_to_user(board_id, user_id, {
+                    "type": "rate_limit_warning",
+                    "message": "Slow down! You're sending too many points."
+                })
                 return
             
             # Add points to the stroke in board state
@@ -191,65 +189,67 @@ class WebSocketManager:
             shape_data = data.get("shape")
             shape_id = f"shape_{int(time.time() * 1000)}_{user_id}"
             
-            # Note: For now we'll store in a separate tracking until we fix the data model
-            # This is a temporary solution - Issue #5 will properly separate this
-            if board.object_count >= board.max_objects:
-                if board_id in self.active_connections and user_id in self.active_connections[board_id]:
-                    await self.active_connections[board_id][user_id].send_json({
-                        "type": "error",
-                        "message": "Object limit reached (5000 maximum)"
-                    })
-                return
-            
-            board.object_count += 1
-            
-            await self.broadcast_to_board(board_id, {
-                "type": "shape_create",
-                "shape_id": shape_id,
+            # Create shape dictionary
+            shape_dict = {
+                "id": shape_id,
                 "user_id": user_id,
-                "shape": {
-                    "type": shape_data.get("type"),
-                    "start_x": shape_data.get("startX", shape_data.get("start_x")),
-                    "start_y": shape_data.get("startY", shape_data.get("start_y")),
-                    "end_x": shape_data.get("endX", shape_data.get("end_x")),
-                    "end_y": shape_data.get("endY", shape_data.get("end_y")),
-                    "color": shape_data.get("color", "#000000"),
-                    "stroke_width": shape_data.get("strokeWidth", shape_data.get("stroke_width", 5)),
-                    "layer_id": shape_data.get("layer_id", "default")
-                },
-                "timestamp": time.time()
-            })
+                "type": shape_data.get("type"),
+                "start_x": shape_data.get("startX", shape_data.get("start_x")),
+                "start_y": shape_data.get("startY", shape_data.get("start_y")),
+                "end_x": shape_data.get("endX", shape_data.get("end_x")),
+                "end_y": shape_data.get("endY", shape_data.get("end_y")),
+                "color": shape_data.get("color", "#000000"),
+                "stroke_width": shape_data.get("strokeWidth", shape_data.get("stroke_width", 5)),
+                "layer_id": shape_data.get("layer_id", "default"),
+                "created_at": time.time()
+            }
+            
+            if board.add_shape(shape_id, shape_dict):
+                await self.broadcast_to_board(board_id, {
+                    "type": "shape_create",
+                    "shape_id": shape_id,
+                    "user_id": user_id,
+                    "shape": shape_dict,
+                    "timestamp": time.time()
+                })
+            else:
+                await self._send_to_user(board_id, user_id, {
+                    "type": "error",
+                    "message": "Object limit reached (5000 maximum)"
+                })
                 
         # ============= TEXT EVENTS =============
         elif event_type == "text_create":
             text_data = data.get("text")
             text_id = f"text_{int(time.time() * 1000)}_{user_id}"
             
-            if board.object_count >= board.max_objects:
-                if board_id in self.active_connections and user_id in self.active_connections[board_id]:
-                    await self.active_connections[board_id][user_id].send_json({
-                        "type": "error",
-                        "message": "Object limit reached (5000 maximum)"
-                    })
-                return
-            
-            board.object_count += 1
-            
-            await self.broadcast_to_board(board_id, {
-                "type": "text_create",
-                "text_id": text_id,
+            # Create text dictionary
+            text_dict = {
+                "id": text_id,
                 "user_id": user_id,
-                "text": {
-                    "text": text_data.get("text", ""),
-                    "x": text_data.get("x", 0),
-                    "y": text_data.get("y", 0),
-                    "color": text_data.get("color", "#000000"),
-                    "layer_id": text_data.get("layer_id", "default"),
-                    "font_size": text_data.get("font_size", 16),
-                    "font_family": text_data.get("font_family", "Arial")
-                },
-                "timestamp": time.time()
-            })
+                "text": text_data.get("text", ""),
+                "x": text_data.get("x", 0),
+                "y": text_data.get("y", 0),
+                "color": text_data.get("color", "#000000"),
+                "layer_id": text_data.get("layer_id", "default"),
+                "font_size": text_data.get("font_size", 16),
+                "font_family": text_data.get("font_family", "Arial"),
+                "created_at": time.time()
+            }
+            
+            if board.add_text(text_id, text_dict):
+                await self.broadcast_to_board(board_id, {
+                    "type": "text_create",
+                    "text_id": text_id,
+                    "user_id": user_id,
+                    "text": text_dict,
+                    "timestamp": time.time()
+                })
+            else:
+                await self._send_to_user(board_id, user_id, {
+                    "type": "error",
+                    "message": "Object limit reached (5000 maximum)"
+                })
                 
         # ============= ERASER EVENTS =============
         elif event_type == "erase_path":
@@ -278,10 +278,8 @@ class WebSocketManager:
                     "user_id": user_id,
                     "timestamp": time.time()
                 })
-                # Remove from board state
-                if stroke_id in board.strokes:
-                    del board.strokes[stroke_id]
-                    board.object_count -= 1
+                # Remove from board state using the new delete method
+                board.delete_object(stroke_id)
                     
         # ============= CURSOR EVENTS =============
         elif event_type == "cursor_update":
@@ -299,6 +297,14 @@ class WebSocketManager:
                     "tool": user.active_tool,
                     "timestamp": time.time()
                 }, exclude_user=user_id)
+    
+    async def _send_to_user(self, board_id: str, user_id: str, message: dict):
+        """Send message to a specific user"""
+        if board_id in self.active_connections and user_id in self.active_connections[board_id]:
+            try:
+                await self.active_connections[board_id][user_id].send_json(message)
+            except Exception as e:
+                print(f"Error sending to user {user_id}: {e}")
                 
     async def broadcast_to_board(self, board_id: str, message: dict, exclude_user: str = None):
         """Send message to all users in board"""

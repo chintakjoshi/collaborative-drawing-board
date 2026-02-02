@@ -3,12 +3,37 @@ import { useRef, useEffect, useState } from 'react';
 import { Stage, Layer, Line, Rect, Circle, Arrow, Text } from 'react-konva';
 import { Point, Stroke, ToolType } from '../../types/drawing';
 
+interface Shape {
+    id: string;
+    type: string;
+    start_x: number;
+    start_y: number;
+    end_x: number;
+    end_y: number;
+    color: string;
+    stroke_width: number;
+    layer_id: string;
+    user_id: string;
+}
+
+interface TextObject {
+    id: string;
+    text: string;
+    x: number;
+    y: number;
+    color: string;
+    layer_id: string;
+    user_id: string;
+    font_size: number;
+    font_family: string;
+}
+
 interface EnhancedDrawingCanvasProps {
     width: number;
     height: number;
     strokes: Stroke[];
-    shapes: any[];
-    textObjects: any[];
+    shapes: Shape[];
+    textObjects: TextObject[];
     onDrawStart?: (point: Point) => void;
     onDrawMove?: (points: Point[]) => void;
     onDrawEnd?: () => void;
@@ -199,12 +224,12 @@ export const EnhancedDrawingCanvas: React.FC<EnhancedDrawingCanvasProps> = ({
                         />
                     ))}
 
-                    {/* Render shapes */}
+                    {/* Render shapes - using snake_case properties from backend */}
                     {shapes.map((shape) => {
-                        const width = Math.abs(shape.endX - shape.startX);
-                        const height = Math.abs(shape.endY - shape.startY);
-                        const x = Math.min(shape.startX, shape.endX);
-                        const y = Math.min(shape.startY, shape.endY);
+                        const width = Math.abs(shape.end_x - shape.start_x);
+                        const height = Math.abs(shape.end_y - shape.start_y);
+                        const x = Math.min(shape.start_x, shape.end_x);
+                        const y = Math.min(shape.start_y, shape.end_y);
 
                         if (shape.type === 'rectangle') {
                             return (
@@ -215,13 +240,13 @@ export const EnhancedDrawingCanvas: React.FC<EnhancedDrawingCanvasProps> = ({
                                     width={width}
                                     height={height}
                                     stroke={shape.color}
-                                    strokeWidth={shape.strokeWidth}
+                                    strokeWidth={shape.stroke_width}
                                 />
                             );
                         } else if (shape.type === 'circle') {
                             const radius = Math.sqrt(width * width + height * height) / 2;
-                            const centerX = (shape.startX + shape.endX) / 2;
-                            const centerY = (shape.startY + shape.endY) / 2;
+                            const centerX = (shape.start_x + shape.end_x) / 2;
+                            const centerY = (shape.start_y + shape.end_y) / 2;
                             return (
                                 <Circle
                                     key={shape.id}
@@ -229,16 +254,16 @@ export const EnhancedDrawingCanvas: React.FC<EnhancedDrawingCanvasProps> = ({
                                     y={centerY}
                                     radius={radius}
                                     stroke={shape.color}
-                                    strokeWidth={shape.strokeWidth}
+                                    strokeWidth={shape.stroke_width}
                                 />
                             );
                         } else if (shape.type === 'line' || shape.type === 'arrow') {
                             return (
                                 <Arrow
                                     key={shape.id}
-                                    points={[shape.startX, shape.startY, shape.endX, shape.endY]}
+                                    points={[shape.start_x, shape.start_y, shape.end_x, shape.end_y]}
                                     stroke={shape.color}
-                                    strokeWidth={shape.strokeWidth}
+                                    strokeWidth={shape.stroke_width}
                                     fill={shape.color}
                                     pointerLength={shape.type === 'arrow' ? 10 : 0}
                                     pointerWidth={shape.type === 'arrow' ? 10 : 0}
@@ -255,8 +280,8 @@ export const EnhancedDrawingCanvas: React.FC<EnhancedDrawingCanvasProps> = ({
                             x={textObj.x}
                             y={textObj.y}
                             text={textObj.text}
-                            fontSize={textObj.fontSize || 16}
-                            fontFamily={textObj.fontFamily || 'Arial'}
+                            fontSize={textObj.font_size || 16}
+                            fontFamily={textObj.font_family || 'Arial'}
                             fill={textObj.color}
                         />
                     ))}
@@ -316,7 +341,7 @@ export const EnhancedDrawingCanvas: React.FC<EnhancedDrawingCanvasProps> = ({
                     )}
 
                     {/* Render eraser preview */}
-                    {currentTool === 'eraser' && (
+                    {currentTool === 'eraser' && currentPoints.length > 0 && (
                         <Circle
                             x={currentPoints[currentPoints.length - 1]?.x || 0}
                             y={currentPoints[currentPoints.length - 1]?.y || 0}
