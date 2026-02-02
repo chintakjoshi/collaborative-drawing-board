@@ -74,6 +74,7 @@ function App() {
     sendCursorUpdate,
     sendUndo,
     sendRedo,
+    sendStrokeEnd,
     isConnected,
     canUndo,
     canRedo
@@ -290,8 +291,14 @@ function App() {
     if (currentTool === 'eraser') {
       currentEraserPoints.current = [];
     }
+
+    // FIX: Send stroke end event
+    if (currentStrokeId.current) {
+      sendStrokeEnd?.(currentStrokeId.current);
+    }
+
     currentStrokeId.current = null;
-  }, [currentTool]);
+  }, [currentTool, sendStrokeEnd]);
 
   const handleShapeStart = useCallback((point: Point) => {
     // Shape drawing starts

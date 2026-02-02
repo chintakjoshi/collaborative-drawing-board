@@ -26,24 +26,34 @@ export const useEnhancedDrawingWebSocket = (
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = boardId
-            ? `${protocol}//${window.location.host}/ws/${boardId}`
-            : `${protocol}//${window.location.host}/ws`;
+        const host = window.location.hostname;
+        const port = '8000'; // Backend port
 
+        // Use different endpoints for create vs join
+        let wsUrl: string;
+        if (isCreating) {
+            wsUrl = `${protocol}//${host}:${port}/ws/create`;
+        } else if (boardId) {
+            wsUrl = `${protocol}//${host}:${port}/ws/join/${boardId}`;
+        } else {
+            console.error('Cannot connect: no board ID and not creating');
+            return;
+        }
+
+        console.log('Connecting to:', wsUrl);
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
-            const message = isCreating
-                ? { action: 'create' }
-                : { action: 'join', boardId };
-
-            ws.send(JSON.stringify(message));
+            console.log('WebSocket connected successfully');
+            // For the new endpoint structure, we don't need to send initial action
+            // The endpoint itself determines the action
         };
 
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
+                console.log('WebSocket message received:', data.type);
 
                 // Track actions for undo/redo
                 if (data.type === 'stroke_start' && data.user_id === userId) {
@@ -66,8 +76,8 @@ export const useEnhancedDrawingWebSocket = (
             console.error('WebSocket error:', error);
         };
 
-        ws.onclose = () => {
-            console.log('WebSocket disconnected');
+        ws.onclose = (event) => {
+            console.log('WebSocket disconnected', event.code, event.reason);
         };
     }, [boardId, onMessage, userId]);
 
@@ -78,13 +88,17 @@ export const useEnhancedDrawingWebSocket = (
                 type: 'stroke_start',
                 stroke_id: strokeId,
                 stroke: {
-                    ...stroke,
-                    userId,
+                    layer_id: stroke.layerId,
+                    brush_type: stroke.brushType,
+                    color: stroke.color,
+                    width: stroke.width,
+                    user_id: userId,
                 }
             };
             wsRef.current.send(JSON.stringify(message));
             return strokeId;
         }
+        return null;
     }, [userId]);
 
     const sendStrokePoints = useCallback((strokeId: string, points: Point[]) => {
@@ -99,6 +113,17 @@ export const useEnhancedDrawingWebSocket = (
                     pressure: p.pressure,
                     timestamp: p.timestamp
                 }))
+            };
+            wsRef.current.send(JSON.stringify(message));
+        }
+    }, [userId]);
+
+    const sendStrokeEnd = useCallback((strokeId: string) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            const message = {
+                type: 'stroke_end',
+                user_id: userId,
+                stroke_id: strokeId
             };
             wsRef.current.send(JSON.stringify(message));
         }
@@ -150,7 +175,7 @@ export const useEnhancedDrawingWebSocket = (
             }]);
             setRedoStack([]);
         }
-    }, [userId, boardId]);
+    }, [userId]);
 
     const sendErasePath = useCallback((points: Point[]) => {
         if (wsRef.current?.readyState === WebSocket.OPEN && points.length > 0) {
@@ -227,6 +252,7 @@ export const useEnhancedDrawingWebSocket = (
         disconnect,
         sendStrokeStart,
         sendStrokePoints,
+        sendStrokeEnd,
         sendShapeCreate,
         sendTextCreate,
         sendErasePath,
