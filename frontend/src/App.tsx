@@ -38,7 +38,10 @@ function App() {
   // Board state
   const [boardId, setBoardId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string>('');
+  const [userToken, setUserToken] = useState<string>('');
   const [joinCode, setJoinCode] = useState('');
+  const [connectionError, setConnectionError] = useState<string>('');
+  const [isConnecting, setIsConnecting] = useState(false);
 
   // Drawing state
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -60,6 +63,7 @@ function App() {
   // Refs for drawing
   const currentStrokeId = useRef<string | null>(null);
   const currentEraserPoints = useRef<Point[]>([]);
+  const hasReceivedWelcome = useRef(false);
 
   // Custom hooks
   const { layers, activeLayerId, setActiveLayerId, addLayer, toggleLayerVisibility, renameLayer, reorderLayers } = useLayers();
@@ -80,25 +84,69 @@ function App() {
     canRedo
   } = useEnhancedDrawingWebSocket(boardId, userId, handleWebSocketMessage);
 
+  // Load session from localStorage on mount
+  useEffect(() => {
+    const savedBoardId = localStorage.getItem('boardId');
+    const savedUserId = localStorage.getItem('userId');
+    const savedToken = localStorage.getItem('userToken');
+    const savedIsAdmin = localStorage.getItem('isAdmin') === 'true';
+
+    if (savedBoardId && savedUserId && savedToken) {
+      console.log('Restoring session:', { savedBoardId, savedUserId, savedIsAdmin });
+      setBoardId(savedBoardId);
+      setUserId(savedUserId);
+      setUserToken(savedToken);
+      setIsAdmin(savedIsAdmin);
+      setIsConnecting(true);
+      // Connect will be triggered by useEffect below
+    }
+  }, []);
+
+  // Auto-connect when boardId is set (from localStorage or new connection)
+  useEffect(() => {
+    if (boardId && !isConnected && isConnecting) {
+      const isCreating = localStorage.getItem('isCreating') === 'true';
+      console.log('Auto-connecting to board:', boardId, 'isCreating:', isCreating);
+      connect(isCreating);
+      localStorage.removeItem('isCreating'); // Clear flag after use
+    }
+  }, [boardId, isConnected, isConnecting, connect]);
+
   // Handle WebSocket messages
   function handleWebSocketMessage(message: any) {
     switch (message.type) {
       case 'welcome':
         console.log('Welcome message received:', message);
-        setUserId(message.user_id);
-        setBoardId(message.board_id);
-        setIsAdmin(message.role === 'admin');
-        
+        hasReceivedWelcome.current = true;
+        setIsConnecting(false);
+        setConnectionError('');
+
+        const receivedUserId = message.user_id;
+        const receivedBoardId = message.board_id;
+        const receivedToken = message.token;
+        const receivedRole = message.role;
+
+        setUserId(receivedUserId);
+        setBoardId(receivedBoardId);
+        setUserToken(receivedToken);
+        setIsAdmin(receivedRole === 'admin');
+
+        // Save to localStorage for persistence
+        localStorage.setItem('boardId', receivedBoardId);
+        localStorage.setItem('userId', receivedUserId);
+        localStorage.setItem('userToken', receivedToken);
+        localStorage.setItem('isAdmin', receivedRole === 'admin' ? 'true' : 'false');
+
         // Initialize from board state
         if (message.board_state) {
           const boardState = message.board_state;
-          
+
           // Set users
           setUsers(boardState.users || []);
-          
+
           // Set object count
           setObjectCount(boardState.object_count || 0);
-          
+
           // Initialize strokes from board state
           if (boardState.strokes && Array.isArray(boardState.strokes)) {
             const initialStrokes: Stroke[] = boardState.strokes.map((s: any) => ({
@@ -118,7 +166,7 @@ function App() {
             }));
             setStrokes(initialStrokes);
           }
-          
+
           // Initialize shapes from board state
           if (boardState.shapes && Array.isArray(boardState.shapes)) {
             const initialShapes: Shape[] = boardState.shapes.map((s: any) => ({
@@ -135,7 +183,7 @@ function App() {
             }));
             setShapes(initialShapes);
           }
-          
+
           // Initialize texts from board state
           if (boardState.texts && Array.isArray(boardState.texts)) {
             const initialTexts: TextObject[] = boardState.texts.map((t: any) => ({
@@ -151,9 +199,9 @@ function App() {
             }));
             setTextObjects(initialTexts);
           }
-          
+
           // Start admin disconnect timer if admin is not connected
-          if (message.role === 'user' && !boardState.admin_online) {
+          if (receivedRole === 'user' && !boardState.admin_online) {
             const disconnectTime = boardState.admin_disconnected_at;
             if (disconnectTime) {
               const timeLeft = Math.max(0, 600 - (Date.now() / 1000 - disconnectTime));
@@ -161,6 +209,25 @@ function App() {
             }
           }
         }
+        break;
+
+      case 'error':
+        console.error('WebSocket error:', message.message);
+        setIsConnecting(false);
+        hasReceivedWelcome.current = false;
+
+        // Set appropriate error message
+        if (message.message.includes('not found') || message.message.includes('full')) {
+          setConnectionError(message.message);
+          // Clear board state and disconnect
+          handleCompleteDisconnect();
+        } else if (message.message.includes('Object limit')) {
+          setShowLimitWarning(true);
+        }
+        break;
+
+      case 'rate_limit_warning':
+        console.warn('Rate limit warning:', message.message);
         break;
 
       case 'user_joined':
@@ -287,29 +354,12 @@ function App() {
 
       case 'session_ended':
         alert('Session has been ended by the admin.');
-        disconnect();
-        setBoardId(null);
-        setUsers([]);
-        setStrokes([]);
-        setShapes([]);
-        setTextObjects([]);
+        handleCompleteDisconnect();
         break;
 
       case 'kicked':
         alert('You have been kicked from the session.');
-        disconnect();
-        setBoardId(null);
-        break;
-
-      case 'error':
-        console.error('WebSocket error:', message.message);
-        if (message.message.includes('Object limit')) {
-          setShowLimitWarning(true);
-        }
-        break;
-        
-      case 'rate_limit_warning':
-        console.warn('Rate limit warning:', message.message);
+        handleCompleteDisconnect();
         break;
     }
   }
@@ -330,6 +380,46 @@ function App() {
 
     return () => clearInterval(interval);
   }, [adminDisconnectTimer]);
+
+  // Monitor connection status - if disconnected and we expected to be connected, show error
+  useEffect(() => {
+    if (isConnecting && !isConnected && !hasReceivedWelcome.current) {
+      // Give it 3 seconds to connect
+      const timeout = setTimeout(() => {
+        if (!hasReceivedWelcome.current && !isConnected) {
+          console.error('Connection timeout');
+          setConnectionError('Failed to connect to board. Please try again.');
+          setIsConnecting(false);
+          handleCompleteDisconnect();
+        }
+      }, 3000);
+
+      return () => clearTimeout(timeout);
+    }
+  }, [isConnecting, isConnected]);
+
+  // Complete disconnect and cleanup
+  const handleCompleteDisconnect = () => {
+    disconnect();
+    setBoardId(null);
+    setUserId('');
+    setUserToken('');
+    setIsAdmin(false);
+    setUsers([]);
+    setStrokes([]);
+    setShapes([]);
+    setTextObjects([]);
+    setObjectCount(0);
+    setAdminDisconnectTimer(null);
+    hasReceivedWelcome.current = false;
+
+    // Clear localStorage
+    localStorage.removeItem('boardId');
+    localStorage.removeItem('userId');
+    localStorage.removeItem('userToken');
+    localStorage.removeItem('isAdmin');
+    localStorage.removeItem('isCreating');
+  };
 
   // Drawing handlers
   const handleDrawStart = useCallback((point: Point) => {
@@ -365,12 +455,12 @@ function App() {
     if (currentTool === 'eraser') {
       currentEraserPoints.current = [];
     }
-    
+
     // Send stroke end event
     if (currentStrokeId.current) {
       sendStrokeEnd?.(currentStrokeId.current);
     }
-    
+
     currentStrokeId.current = null;
   }, [currentTool, sendStrokeEnd]);
 
@@ -432,14 +522,25 @@ function App() {
 
   // UI handlers
   const handleCreateBoard = () => {
+    setConnectionError('');
+    setIsConnecting(true);
+    hasReceivedWelcome.current = false;
+    localStorage.setItem('isCreating', 'true');
     connect(true);
   };
 
   const handleJoinBoard = () => {
-    if (joinCode.length === 6) {
-      setBoardId(joinCode.toUpperCase());
-      connect(false);
+    if (joinCode.length !== 6) {
+      setConnectionError('Board code must be 6 characters');
+      return;
     }
+
+    setConnectionError('');
+    setIsConnecting(true);
+    hasReceivedWelcome.current = false;
+    setBoardId(joinCode.toUpperCase());
+    localStorage.setItem('isCreating', 'false');
+    // Connection will be triggered by useEffect
   };
 
   const handleUndo = () => {
@@ -482,7 +583,7 @@ function App() {
   });
 
   // Render join/create screen or drawing board
-  if (!boardId) {
+  if (!boardId || !hasReceivedWelcome.current) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 flex flex-col">
         <header className="bg-white shadow">
@@ -511,6 +612,26 @@ function App() {
               </p>
             </div>
 
+            {/* Error Message */}
+            {connectionError && (
+              <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+                <div className="flex items-center">
+                  <FiAlertCircle className="text-red-600 mr-2" />
+                  <p className="text-red-800 font-medium">{connectionError}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Loading State */}
+            {isConnecting && (
+              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 mr-3"></div>
+                  <p className="text-blue-800 font-medium">Connecting to board...</p>
+                </div>
+              </div>
+            )}
+
             <div className="grid md:grid-cols-2 gap-8 mb-10">
               <div className="bg-blue-50 p-6 rounded-xl">
                 <h3 className="text-xl font-semibold text-blue-800 mb-4">Create New Board</h3>
@@ -519,9 +640,10 @@ function App() {
                 </p>
                 <button
                   onClick={handleCreateBoard}
-                  className="w-full py-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-lg font-medium transition-colors"
+                  disabled={isConnecting}
+                  className="w-full py-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Create New Board
+                  {isConnecting ? 'Creating...' : 'Create New Board'}
                 </button>
               </div>
 
@@ -538,13 +660,14 @@ function App() {
                     onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
                     className="flex-1 px-5 py-4 border-2 border-r-0 border-purple-300 rounded-l-xl focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-center text-xl font-mono tracking-wider"
                     maxLength={6}
+                    disabled={isConnecting}
                   />
                   <button
                     onClick={handleJoinBoard}
-                    disabled={joinCode.length !== 6}
+                    disabled={joinCode.length !== 6 || isConnecting}
                     className="px-8 py-4 bg-purple-600 text-white rounded-r-xl hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-lg font-medium transition-colors"
                   >
-                    Join
+                    {isConnecting ? '...' : 'Join'}
                   </button>
                 </div>
               </div>
@@ -583,7 +706,7 @@ function App() {
     );
   }
 
-  // Render drawing board
+  // Render drawing board (only if we have a valid connection)
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
       {/* Header */}
@@ -632,12 +755,7 @@ function App() {
               <button
                 onClick={() => {
                   if (window.confirm('Leave this drawing board?')) {
-                    disconnect();
-                    setBoardId(null);
-                    setUsers([]);
-                    setStrokes([]);
-                    setShapes([]);
-                    setTextObjects([]);
+                    handleCompleteDisconnect();
                   }
                 }}
                 className="px-4 py-2 text-red-600 border border-red-300 rounded-lg hover:bg-red-50"

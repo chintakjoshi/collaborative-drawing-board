@@ -18,7 +18,7 @@ app = FastAPI(lifespan=lifespan)
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://192.168.1.43:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -56,16 +56,19 @@ async def websocket_create_endpoint(websocket: WebSocket):
         # Store connection
         ws_manager.active_connections[board_id][user_id] = websocket
         
+        print(f"✅ Board created: {board_id}, Admin: {user_id}")
+        
         # Main message loop
         while True:
             data = await websocket.receive_json()
             await ws_manager.handle_drawing(board_id, user_id, data)
             
     except WebSocketDisconnect:
+        print(f"❌ Create endpoint disconnected: board={board_id}, user={user_id}")
         if board_id and user_id:
             await ws_manager.disconnect(board_id, user_id)
     except Exception as e:
-        print(f"WebSocket error in create: {e}")
+        print(f"❌ WebSocket error in create: {e}")
         if board_id and user_id:
             await ws_manager.disconnect(board_id, user_id)
         try:
@@ -82,29 +85,42 @@ async def websocket_join_endpoint(websocket: WebSocket, board_id: str):
     user_id = None
     
     try:
+        # Check if board exists first
+        if board_id not in ws_manager.boards:
+            print(f"❌ Board not found: {board_id}")
+            await websocket.send_json({
+                "type": "error",
+                "message": "Board not found. Please check the code and try again."
+            })
+            await websocket.close(code=1008, reason="Board not found")
+            return
+        
         # Join existing board
         board_info = await ws_manager.join_board(board_id, websocket)
         
         if not board_info:
+            print(f"❌ Failed to join board: {board_id}")
             await websocket.send_json({
                 "type": "error",
-                "message": "Board not found or full"
+                "message": "Failed to join board. It may be full or inactive."
             })
-            await websocket.close()
+            await websocket.close(code=1008, reason="Cannot join board")
             return
         
-        # Check for errors (banned, timeout, etc.)
+        # Check for specific errors (banned, timeout, full)
         if "error" in board_info:
             error_messages = {
                 "banned": "You are banned from this board",
                 "timeout": "You are timed out from this board",
                 "full": "Board is full (10 users maximum)"
             }
+            error_msg = error_messages.get(board_info["error"], "Cannot join board")
+            print(f"❌ Join rejected for {board_id}: {board_info['error']}")
             await websocket.send_json({
                 "type": "error",
-                "message": error_messages.get(board_info["error"], "Cannot join board")
+                "message": error_msg
             })
-            await websocket.close()
+            await websocket.close(code=1008, reason=board_info["error"])
             return
             
         user_id = board_info["user_id"]
@@ -115,50 +131,25 @@ async def websocket_join_endpoint(websocket: WebSocket, board_id: str):
             **board_info
         })
         
+        print(f"✅ User joined board: {board_id}, User: {board_info['nickname']} ({user_id})")
+        
         # Main message loop
         while True:
             data = await websocket.receive_json()
             await ws_manager.handle_drawing(board_id, user_id, data)
             
     except WebSocketDisconnect:
+        print(f"❌ Join endpoint disconnected: board={board_id}, user={user_id}")
         if user_id:
             await ws_manager.disconnect(board_id, user_id)
     except Exception as e:
-        print(f"WebSocket error in join: {e}")
+        print(f"❌ WebSocket error in join: {e}")
         if user_id:
             await ws_manager.disconnect(board_id, user_id)
         try:
             await websocket.close()
         except:
             pass
-
-# Legacy endpoint for backward compatibility (optional)
-@app.websocket("/ws/{board_id}")
-async def websocket_legacy_endpoint(websocket: WebSocket, board_id: str):
-    """Legacy WebSocket endpoint - redirects to join"""
-    await websocket.accept()
-    
-    try:
-        # First message should indicate action
-        data = await websocket.receive_json()
-        action = data.get("action")
-        
-        if action == "create":
-            # Redirect to create endpoint logic
-            await websocket.send_json({
-                "type": "error",
-                "message": "Please connect to /ws/create for new boards"
-            })
-            await websocket.close()
-        else:
-            # Redirect to join endpoint logic
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Please connect to /ws/join/{board_id} to join"
-            })
-            await websocket.close()
-    except:
-        await websocket.close()
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
