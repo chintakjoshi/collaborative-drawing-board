@@ -13,7 +13,7 @@ interface Action {
     timestamp: number;
 }
 
-export const useEnhancedDrawingWebSocket = (
+export const useDrawingWebSocket = (
     boardId: string | null,
     userId: string,
     onMessage: (message: WebSocketMessage) => void
