@@ -1,10 +1,10 @@
 import React from 'react';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { EnhancedDrawingCanvas } from './components/Canvas/EnhancedDrawingCanvas';
+import { DrawingCanvas } from './components/Canvas/DrawingCanvas';
 import { Toolbar } from './components/Toolbar/Toolbar';
 import { UserList } from './components/Board/UserList';
 import { AdminPanel } from './components/Admin/AdminPanel';
-import { useEnhancedDrawingWebSocket } from './hooks/useEnhancedDrawingWebSocket';
+import { useDrawingWebSocket } from './hooks/useDrawingWebSocket';
 import { useLayers } from './hooks/useLayers';
 import { Stroke, Point, User, ToolType } from './types/drawing';
 import { FiSettings, FiUsers, FiLayers, FiAlertCircle } from 'react-icons/fi';
@@ -81,7 +81,7 @@ function App() {
     isConnected,
     canUndo,
     canRedo
-  } = useEnhancedDrawingWebSocket(boardId, userId, handleWebSocketMessage);
+  } = useDrawingWebSocket(boardId, userId, handleWebSocketMessage);
 
   // Load session from localStorage on mount
   useEffect(() => {
@@ -96,17 +96,28 @@ function App() {
       setUserId(savedUserId);
       setIsAdmin(savedIsAdmin);
       setIsConnecting(true);
-      // Connect will be triggered by useEffect below
+      localStorage.setItem('isCreating', 'false');
     }
   }, []);
 
   // Auto-connect when boardId is set (from localStorage or new connection)
   useEffect(() => {
     if (boardId && !isConnected && isConnecting) {
-      const isCreating = localStorage.getItem('isCreating') === 'true';
-      console.log('Auto-connecting to board:', boardId, 'isCreating:', isCreating);
-      connect(isCreating);
-      localStorage.removeItem('isCreating'); // Clear flag after use
+      const savedBoardId = localStorage.getItem('boardId');
+      const isCreatingFlag = localStorage.getItem('isCreating') === 'true';
+      const isRestoringSession = (savedBoardId === boardId);
+      const shouldCreate = isCreatingFlag && !isRestoringSession;
+
+      console.log('Auto-connecting:', {
+        boardId,
+        isCreatingFlag,
+        isRestoringSession,
+        shouldCreate,
+        savedBoardId
+      });
+
+      connect(shouldCreate);
+      localStorage.removeItem('isCreating');
     }
   }, [boardId, isConnected, isConnecting, connect]);
 
@@ -358,6 +369,16 @@ function App() {
         alert('You have been kicked from the session.');
         handleCompleteDisconnect();
         break;
+
+      case 'admin_disconnect_countdown':
+        console.log('Admin disconnect countdown:', message.seconds_remaining);
+        setAdminDisconnectTimer(message.seconds_remaining);
+        break;
+
+      case 'admin_reconnected':
+        console.log('Admin reconnected, clearing timer');
+        setAdminDisconnectTimer(null);
+        break;
     }
   }
 
@@ -521,7 +542,13 @@ function App() {
     setConnectionError('');
     setIsConnecting(true);
     hasReceivedWelcome.current = false;
+
+    localStorage.removeItem('boardId');
+    localStorage.removeItem('userId');
+    localStorage.removeItem('userToken');
+    localStorage.removeItem('isAdmin');
     localStorage.setItem('isCreating', 'true');
+
     connect(true);
   };
 
@@ -951,7 +978,7 @@ function App() {
 
           {/* Canvas */}
           <div className="flex-1 relative overflow-auto">
-            <EnhancedDrawingCanvas
+            <DrawingCanvas
               width={window.innerWidth * 0.8}
               height={window.innerHeight * 0.8}
               strokes={visibleStrokes}

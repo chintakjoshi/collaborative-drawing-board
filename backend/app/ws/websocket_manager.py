@@ -4,6 +4,7 @@ import secrets
 import string
 import time
 from typing import Dict, List, Optional, Set
+from ..database.models import User
 from fastapi import WebSocket
 from ..database import get_db, DatabaseService
 from ..core.shapes import EraserEngine, GeometryUtils
@@ -18,6 +19,9 @@ class WebSocketManager:
         
         # Rate limiting (in memory is fine for this)
         self.user_rates: Dict[str, Dict] = {}
+
+        # Admin disconnect timers
+        self.admin_timers: Dict[str, asyncio.Task] = {}
         
     async def generate_join_code(self) -> str:
         """Generate a 6-character alphanumeric code"""
@@ -69,8 +73,8 @@ class WebSocketManager:
         finally:
             db.close()
         
-    async def join_board(self, board_id: str, ws: WebSocket, token: str = None) -> Optional[dict]:
-        """Join existing board as user"""
+    async def join_board(self, board_id: str, ws: WebSocket, user_token: str = None) -> Optional[dict]:
+        """Join existing board as user OR rejoin as admin"""
         db = get_db()
         try:
             # Check if board exists
@@ -78,44 +82,82 @@ class WebSocketManager:
             if not board:
                 return None
             
-            # Check if token is banned
-            if token and DatabaseService.is_user_banned(db, board_id, token):
-                return {"error": "banned"}
+            # Check if this is admin trying to rejoin
+            # Admin is stored in localStorage with their user_id
+            saved_user_id = user_token  # Frontend should pass the saved user_id as token when reconnecting
             
-            # Get current user count
-            users = DatabaseService.get_board_users(db, board_id, connected_only=True)
+            is_admin_rejoining = False
+            user_id = None
+            nickname = None
+            role = "user"
             
-            # Check if board is full
-            if len(users) >= board.max_users:
-                return {"error": "full"}
+            # Check if there's an existing user record for this connection
+            existing_users = DatabaseService.get_board_users(db, board_id, connected_only=False)
             
-            # Generate user info
-            user_id = secrets.token_urlsafe(16)
-            nickname = f"User{len(users) + 1}"
+            # Try to find if this is admin reconnecting
+            for existing_user in existing_users:
+                if existing_user.user_id == board.admin_id and existing_user.user_id in self.connection_tokens:
+                    # This is the admin trying to reconnect
+                    is_admin_rejoining = True
+                    user_id = existing_user.user_id
+                    nickname = existing_user.nickname
+                    role = "admin"
+                    print(f"🔄 Admin rejoining board {board_id}: {user_id}")
+                    break
             
-            # Check if user is timed out
-            if DatabaseService.is_user_timed_out(db, board_id, user_id):
-                return {"error": "timeout"}
+            if not is_admin_rejoining:
+                # New user joining (not admin reconnect)
+                
+                # Check if token is banned
+                if user_token and DatabaseService.is_user_banned(db, board_id, user_token):
+                    return {"error": "banned"}
+                
+                # Get current CONNECTED user count
+                connected_users = [u for u in existing_users if u.connected]
+                
+                # Check if board is full
+                if len(connected_users) >= board.max_users:
+                    return {"error": "full"}
+                
+                # Generate new user info
+                user_id = secrets.token_urlsafe(16)
+                nickname = f"User{len(existing_users) + 1}"
+                role = "user"
+                
+                # Check if user is timed out
+                if DatabaseService.is_user_timed_out(db, board_id, user_id):
+                    return {"error": "timeout"}
+                
+                # Add new user to database
+                DatabaseService.add_user(db, user_id, board_id, nickname, role="user")
+                print(f"👤 New user joining board {board_id}: {nickname} ({user_id})")
+            else:
+                # Admin is rejoining - mark them as connected again
+                db_user = db.query(User).filter(User.user_id == user_id, User.board_id == board_id).first()
+                if db_user:
+                    db_user.connected = True
+                    db.commit()
+                
+                # Cancel admin disconnect timer
+                await self._cancel_admin_timer(board_id, db)
             
-            # Add user to database
-            DatabaseService.add_user(db, user_id, board_id, nickname, role="user")
-            
-            # Generate token for this user
-            user_token = secrets.token_urlsafe(32)
-            self.connection_tokens[user_id] = user_token
+            # Generate/reuse token for this user
+            user_token_to_send = self.connection_tokens.get(user_id, secrets.token_urlsafe(32))
+            self.connection_tokens[user_id] = user_token_to_send
             
             # Store connection
             if board_id not in self.active_connections:
                 self.active_connections[board_id] = {}
             self.active_connections[board_id][user_id] = ws
             
-            # Notify others
-            await self.broadcast_to_board(board_id, {
-                "type": "user_joined",
-                "user_id": user_id,
-                "nickname": nickname,
-                "timestamp": time.time()
-            }, exclude_user=user_id)
+            # Notify others (but not on admin rejoin to avoid spam)
+            if not is_admin_rejoining:
+                await self.broadcast_to_board(board_id, {
+                    "type": "user_joined",
+                    "user_id": user_id,
+                    "nickname": nickname,
+                    "timestamp": time.time()
+                }, exclude_user=user_id)
             
             # Get full board state
             board_state = DatabaseService.get_board_state(db, board_id)
@@ -123,9 +165,9 @@ class WebSocketManager:
             return {
                 "board_id": board_id,
                 "user_id": user_id,
-                "token": user_token,
+                "token": user_token_to_send,
                 "nickname": nickname,
-                "role": "user",
+                "role": role,
                 "board_state": board_state
             }
         finally:
@@ -390,7 +432,7 @@ class WebSocketManager:
             if board and user_id == board.admin_id:
                 # Admin disconnected - update timestamp
                 DatabaseService.update_admin_disconnect(db, board_id, time.time())
-                # TODO: Start 10-minute shutdown timer
+                await self._start_admin_timer(board_id)
             
             # Remove from active connections
             if board_id in self.active_connections and user_id in self.active_connections[board_id]:
@@ -408,6 +450,45 @@ class WebSocketManager:
                 del self.active_connections[board_id]
         finally:
             db.close()
+
+    async def _start_admin_timer(self, board_id: str):
+        async def timer():
+            try:
+                await asyncio.sleep(600)
+
+                # After 10 min, clean up board
+                self.cleanup_board(board_id)
+
+                await self.broadcast_to_board(board_id, {
+                    "type": "session_ended",
+                    "reason": "admin_timeout",
+                    "timestamp": time.time()
+                })
+
+            except asyncio.CancelledError:
+                pass
+
+        self.admin_timers[board_id] = asyncio.create_task(timer())
+
+
+    async def _cancel_admin_timer(self, board_id: str, db):
+        """Cancel admin disconnect timer when admin reconnects"""
+        # Cancel background timer task
+        if board_id in self.admin_timers:
+            self.admin_timers[board_id].cancel()
+            del self.admin_timers[board_id]
+            print(f"⏹️  Admin timer cancelled for board {board_id}")
+        
+        # Clear disconnect timestamp in database
+        DatabaseService.update_admin_disconnect(db, board_id, None)
+        
+        # Notify all users that admin is back
+        await self.broadcast_to_board(board_id, {
+            "type": "admin_reconnected",
+            "timestamp": time.time()
+        })
+        
+        print(f"✅ Admin reconnected to board {board_id}, timer cancelled and users notified")
         
     def cleanup_board(self, board_id: str):
         """Cleanup board after session ends"""

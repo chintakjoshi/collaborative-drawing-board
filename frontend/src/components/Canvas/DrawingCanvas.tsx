@@ -28,7 +28,7 @@ interface TextObject {
     font_family: string;
 }
 
-interface EnhancedDrawingCanvasProps {
+interface DrawingCanvasProps {
     width: number;
     height: number;
     strokes: Stroke[];
@@ -46,7 +46,7 @@ interface EnhancedDrawingCanvasProps {
     currentColor: string;
 }
 
-export const EnhancedDrawingCanvas: React.FC<EnhancedDrawingCanvasProps> = ({
+export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     width,
     height,
     strokes,
