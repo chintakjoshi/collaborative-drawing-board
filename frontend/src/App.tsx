@@ -38,7 +38,6 @@ function App() {
   // Board state
   const [boardId, setBoardId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string>('');
-  const [userToken, setUserToken] = useState<string>('');
   const [joinCode, setJoinCode] = useState('');
   const [connectionError, setConnectionError] = useState<string>('');
   const [isConnecting, setIsConnecting] = useState(false);
@@ -66,7 +65,7 @@ function App() {
   const hasReceivedWelcome = useRef(false);
 
   // Custom hooks
-  const { layers, activeLayerId, setActiveLayerId, addLayer, toggleLayerVisibility, renameLayer, reorderLayers } = useLayers();
+  const { layers, activeLayerId, setActiveLayerId, addLayer, toggleLayerVisibility, renameLayer } = useLayers();
   const {
     connect,
     disconnect,
@@ -95,7 +94,6 @@ function App() {
       console.log('Restoring session:', { savedBoardId, savedUserId, savedIsAdmin });
       setBoardId(savedBoardId);
       setUserId(savedUserId);
-      setUserToken(savedToken);
       setIsAdmin(savedIsAdmin);
       setIsConnecting(true);
       // Connect will be triggered by useEffect below
@@ -128,7 +126,6 @@ function App() {
 
         setUserId(receivedUserId);
         setBoardId(receivedBoardId);
-        setUserToken(receivedToken);
         setIsAdmin(receivedRole === 'admin');
 
         // Save to localStorage for persistence
@@ -399,11 +396,10 @@ function App() {
   }, [isConnecting, isConnected]);
 
   // Complete disconnect and cleanup
-  const handleCompleteDisconnect = () => {
+  const handleCompleteDisconnect = useCallback(() => {
     disconnect();
     setBoardId(null);
     setUserId('');
-    setUserToken('');
     setIsAdmin(false);
     setUsers([]);
     setStrokes([]);
@@ -419,7 +415,7 @@ function App() {
     localStorage.removeItem('userToken');
     localStorage.removeItem('isAdmin');
     localStorage.removeItem('isCreating');
-  };
+  }, [disconnect]);
 
   // Drawing handlers
   const handleDrawStart = useCallback((point: Point) => {

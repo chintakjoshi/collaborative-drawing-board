@@ -4,14 +4,18 @@ from contextlib import asynccontextmanager
 import uvicorn
 
 from app.ws.websocket_manager import WebSocketManager
+from app.database import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    print("🚀 Starting Drawing API...")
+    init_db()  # Initialize database
     app.state.ws_manager = WebSocketManager()
+    print("✅ Ready to accept connections")
     yield
     # Shutdown
-    # Cleanup code here
+    print("👋 Shutting down Drawing API...")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -26,11 +30,11 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Drawing API"}
+    return {"status": "ok", "message": "Drawing API with SQLite"}
 
 @app.get("/api/health")
 async def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "database": "sqlite"}
 
 @app.websocket("/ws/create")
 async def websocket_create_endpoint(websocket: WebSocket):
@@ -69,6 +73,8 @@ async def websocket_create_endpoint(websocket: WebSocket):
             await ws_manager.disconnect(board_id, user_id)
     except Exception as e:
         print(f"❌ WebSocket error in create: {e}")
+        import traceback
+        traceback.print_exc()
         if board_id and user_id:
             await ws_manager.disconnect(board_id, user_id)
         try:
@@ -85,15 +91,23 @@ async def websocket_join_endpoint(websocket: WebSocket, board_id: str):
     user_id = None
     
     try:
+        # Import here to avoid circular imports
+        from app.database import get_db, DatabaseService
+        
         # Check if board exists first
-        if board_id not in ws_manager.boards:
-            print(f"❌ Board not found: {board_id}")
-            await websocket.send_json({
-                "type": "error",
-                "message": "Board not found. Please check the code and try again."
-            })
-            await websocket.close(code=1008, reason="Board not found")
-            return
+        db = get_db()
+        try:
+            board = DatabaseService.get_board(db, board_id)
+            if not board:
+                print(f"❌ Board not found: {board_id}")
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Board not found. Please check the code and try again."
+                })
+                await websocket.close(code=1008, reason="Board not found")
+                return
+        finally:
+            db.close()
         
         # Join existing board
         board_info = await ws_manager.join_board(board_id, websocket)
@@ -144,6 +158,8 @@ async def websocket_join_endpoint(websocket: WebSocket, board_id: str):
             await ws_manager.disconnect(board_id, user_id)
     except Exception as e:
         print(f"❌ WebSocket error in join: {e}")
+        import traceback
+        traceback.print_exc()
         if user_id:
             await ws_manager.disconnect(board_id, user_id)
         try:
