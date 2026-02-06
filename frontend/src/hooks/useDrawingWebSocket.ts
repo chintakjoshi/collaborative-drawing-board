@@ -20,6 +20,7 @@ export const useDrawingWebSocket = (
     userToken?: string | null
 ) => {
     const wsRef = useRef<WebSocket | null>(null);
+    const [isConnected, setIsConnected] = useState(false);
     const [undoStack, setUndoStack] = useState<Action[]>([]);
     const [redoStack, setRedoStack] = useState<Action[]>([]);
 
@@ -29,8 +30,6 @@ export const useDrawingWebSocket = (
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const host = window.location.hostname;
         const port = '8000'; // Backend port
-        const isCreate = isCreating;
-
         // Use different endpoints for create vs join
         let wsUrl: string;
         if (isCreating) {
@@ -49,6 +48,7 @@ export const useDrawingWebSocket = (
 
         ws.onopen = () => {
             console.log('WebSocket connected successfully');
+            setIsConnected(true);
         };
 
         ws.onmessage = (event) => {
@@ -75,10 +75,12 @@ export const useDrawingWebSocket = (
 
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
+            setIsConnected(false);
         };
 
         ws.onclose = (event) => {
             console.log('WebSocket disconnected', event.code, event.reason);
+            setIsConnected(false);
         };
     }, [boardId, onMessage, userId, userToken]);
 
@@ -240,6 +242,7 @@ export const useDrawingWebSocket = (
             wsRef.current.close();
             wsRef.current = null;
         }
+        setIsConnected(false);
     }, []);
 
     useEffect(() => {
@@ -260,7 +263,7 @@ export const useDrawingWebSocket = (
         sendCursorUpdate,
         sendUndo,
         sendRedo,
-        isConnected: wsRef.current?.readyState === WebSocket.OPEN,
+        isConnected,
         canUndo: undoStack.length > 0,
         canRedo: redoStack.length > 0
     };

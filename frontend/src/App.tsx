@@ -402,23 +402,6 @@ function App() {
     return () => clearInterval(interval);
   }, [adminDisconnectTimer]);
 
-  // Monitor connection status - if disconnected and we expected to be connected, show error
-  useEffect(() => {
-    if (isConnecting && !isConnected && !hasReceivedWelcome.current) {
-      // Give it 3 seconds to connect
-      const timeout = setTimeout(() => {
-        if (!hasReceivedWelcome.current && !isConnected) {
-          console.error('Connection timeout');
-          setConnectionError('Failed to connect to board. Please try again.');
-          setIsConnecting(false);
-          handleCompleteDisconnect();
-        }
-      }, 3000);
-
-      return () => clearTimeout(timeout);
-    }
-  }, [isConnecting, isConnected]);
-
   // Complete disconnect and cleanup
   const handleCompleteDisconnect = useCallback(() => {
     disconnect();
@@ -441,6 +424,23 @@ function App() {
     localStorage.removeItem('isAdmin');
     localStorage.removeItem('isCreating');
   }, [disconnect]);
+
+  // Monitor connection status - if disconnected and we expected to be connected, show error
+  useEffect(() => {
+    if (!isConnecting || hasReceivedWelcome.current) return;
+
+    // Give it 3 seconds to connect. If the socket is open, don't fail yet.
+    const timeout = setTimeout(() => {
+      if (!hasReceivedWelcome.current && !isConnected) {
+        console.error('Connection timeout');
+        setConnectionError('Failed to connect to board. Please try again.');
+        setIsConnecting(false);
+        handleCompleteDisconnect();
+      }
+    }, 3000);
+
+    return () => clearTimeout(timeout);
+  }, [isConnecting, isConnected, handleCompleteDisconnect]);
 
   // Drawing handlers
   const handleDrawStart = useCallback((point: Point) => {

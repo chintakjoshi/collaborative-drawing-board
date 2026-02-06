@@ -1,5 +1,5 @@
 import React from 'react';
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Stage, Layer, Line, Rect, Circle, Arrow, Text } from 'react-konva';
 import { Point, Stroke, ToolType } from '../../types/drawing';
 

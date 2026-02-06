@@ -12,7 +12,6 @@ import {
     FiEdit2,
     FiRotateCcw,
     FiRotateCw,
-    FiDroplet,
     FiLayers,
     FiEye,
     FiEyeOff
