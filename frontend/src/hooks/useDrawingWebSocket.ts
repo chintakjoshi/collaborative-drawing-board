@@ -16,7 +16,8 @@ interface Action {
 export const useDrawingWebSocket = (
     boardId: string | null,
     userId: string,
-    onMessage: (message: WebSocketMessage) => void
+    onMessage: (message: WebSocketMessage) => void,
+    userToken?: string | null
 ) => {
     const wsRef = useRef<WebSocket | null>(null);
     const [undoStack, setUndoStack] = useState<Action[]>([]);
@@ -28,13 +29,15 @@ export const useDrawingWebSocket = (
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const host = window.location.hostname;
         const port = '8000'; // Backend port
+        const isCreate = isCreating;
 
         // Use different endpoints for create vs join
         let wsUrl: string;
         if (isCreating) {
             wsUrl = `${protocol}//${host}:${port}/ws/create`;
         } else if (boardId) {
-            wsUrl = `${protocol}//${host}:${port}/ws/join/${boardId}`;
+            const tokenParam = userToken ? `?token=${encodeURIComponent(userToken)}` : '';
+            wsUrl = `${protocol}//${host}:${port}/ws/join/${boardId}${tokenParam}`;
         } else {
             console.error('Cannot connect: no board ID and not creating');
             return;
@@ -46,8 +49,6 @@ export const useDrawingWebSocket = (
 
         ws.onopen = () => {
             console.log('WebSocket connected successfully');
-            // For the new endpoint structure, we don't need to send initial action
-            // The endpoint itself determines the action
         };
 
         ws.onmessage = (event) => {
@@ -79,7 +80,7 @@ export const useDrawingWebSocket = (
         ws.onclose = (event) => {
             console.log('WebSocket disconnected', event.code, event.reason);
         };
-    }, [boardId, onMessage, userId]);
+    }, [boardId, onMessage, userId, userToken]);
 
     const sendStrokeStart = useCallback((stroke: Omit<Stroke, 'id' | 'createdAt'>) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {

@@ -1,3 +1,4 @@
+# connection.py - UPDATED VERSION
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
@@ -11,8 +12,8 @@ DATABASE_URL = f"sqlite:///{DB_PATH}"
 # Create engine
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},  # Needed for SQLite
-    echo=False  # Set to True for SQL query logging
+    connect_args={"check_same_thread": False},
+    echo=False
 )
 
 # Create session factory
@@ -29,7 +30,7 @@ def get_db() -> Session:
     """Get database session"""
     db = SessionLocal()
     try:
-        return db
+        yield db
     except Exception:
         db.close()
         raise

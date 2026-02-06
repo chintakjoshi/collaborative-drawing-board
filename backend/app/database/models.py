@@ -1,10 +1,29 @@
+# models.py - UPDATED VERSION
+from sqlalchemy.schema import Index
 from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, Text, DateTime
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 from datetime import datetime
 
 Base = declarative_base()
 
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(255), index=True, nullable=False)
+    board_id = Column(String(6), ForeignKey("boards.board_id"), nullable=False)
+    nickname = Column(String(100), nullable=False)
+    role = Column(String(10), default="user")
+    connected = Column(Boolean, default=True)
+    cursor_x = Column(Float, default=0)
+    cursor_y = Column(Float, default=0)
+    active_tool = Column(String(20), default="pen")
+    color = Column(String(7), default="#000000")
+    connected_at = Column(Float, default=lambda: datetime.now().timestamp())
+    
+    # Relationships - will be defined after Board is created
+    board = relationship("Board", back_populates="users")
 
 class Board(Base):
     __tablename__ = "boards"
@@ -13,10 +32,11 @@ class Board(Base):
     board_id = Column(String(6), unique=True, index=True, nullable=False)
     admin_id = Column(String(255), nullable=False)
     created_at = Column(Float, default=lambda: datetime.now().timestamp())
-    admin_disconnected_at = Column(Float, nullable=True)
     max_users = Column(Integer, default=10)
     max_objects = Column(Integer, default=5000)
     is_active = Column(Boolean, default=True)
+    last_activity = Column(Float, default=lambda: datetime.now().timestamp())
+    object_count = Column(Integer, default=0)
     
     # Relationships
     users = relationship("User", back_populates="board", cascade="all, delete-orphan")
@@ -27,26 +47,7 @@ class Board(Base):
     banned_tokens = relationship("BannedToken", back_populates="board", cascade="all, delete-orphan")
     timeouts = relationship("Timeout", back_populates="board", cascade="all, delete-orphan")
 
-
-class User(Base):
-    __tablename__ = "users"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String(255), index=True, nullable=False)
-    board_id = Column(String(6), ForeignKey("boards.board_id"), nullable=False)
-    nickname = Column(String(100), nullable=False)
-    role = Column(String(10), default="user")  # admin or user
-    connected = Column(Boolean, default=True)
-    cursor_x = Column(Float, default=0)
-    cursor_y = Column(Float, default=0)
-    active_tool = Column(String(20), default="pen")
-    color = Column(String(7), default="#000000")
-    connected_at = Column(Float, default=lambda: datetime.now().timestamp())
-    
-    # Relationships
-    board = relationship("Board", back_populates="users")
-
-
+# Other models follow...
 class Stroke(Base):
     __tablename__ = "strokes"
     
@@ -64,7 +65,6 @@ class Stroke(Base):
     board = relationship("Board", back_populates="strokes")
     points = relationship("StrokePoint", back_populates="stroke", cascade="all, delete-orphan")
 
-
 class StrokePoint(Base):
     __tablename__ = "stroke_points"
     
@@ -74,11 +74,10 @@ class StrokePoint(Base):
     y = Column(Float, nullable=False)
     pressure = Column(Float, default=0.5)
     timestamp = Column(Float, default=lambda: datetime.now().timestamp())
-    point_order = Column(Integer, nullable=False)  # To maintain order
+    point_order = Column(Integer, nullable=False)
     
     # Relationships
     stroke = relationship("Stroke", back_populates="points")
-
 
 class Shape(Base):
     __tablename__ = "shapes"
@@ -88,7 +87,7 @@ class Shape(Base):
     board_id = Column(String(6), ForeignKey("boards.board_id"), nullable=False)
     user_id = Column(String(255), nullable=False)
     layer_id = Column(String(255), default="default")
-    type = Column(String(20), nullable=False)  # rectangle, circle, line, arrow
+    type = Column(String(20), nullable=False)
     start_x = Column(Float, nullable=False)
     start_y = Column(Float, nullable=False)
     end_x = Column(Float, nullable=False)
@@ -99,7 +98,6 @@ class Shape(Base):
     
     # Relationships
     board = relationship("Board", back_populates="shapes")
-
 
 class TextObject(Base):
     __tablename__ = "text_objects"
@@ -120,7 +118,6 @@ class TextObject(Base):
     # Relationships
     board = relationship("Board", back_populates="texts")
 
-
 class Layer(Base):
     __tablename__ = "layers"
     
@@ -134,7 +131,6 @@ class Layer(Base):
     # Relationships
     board = relationship("Board", back_populates="layers")
 
-
 class BannedToken(Base):
     __tablename__ = "banned_tokens"
     
@@ -146,7 +142,6 @@ class BannedToken(Base):
     # Relationships
     board = relationship("Board", back_populates="banned_tokens")
 
-
 class Timeout(Base):
     __tablename__ = "timeouts"
     
@@ -157,3 +152,95 @@ class Timeout(Base):
     
     # Relationships
     board = relationship("Board", back_populates="timeouts")
+
+class ActiveConnection(Base):
+    __tablename__ = "active_connections"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    board_id = Column(String(6), ForeignKey("boards.board_id"), nullable=False)
+    user_id = Column(String(255), nullable=False)
+    websocket_id = Column(String(255), nullable=True)
+    connected_at = Column(Float, default=lambda: datetime.now().timestamp())
+    last_heartbeat = Column(Float, default=lambda: datetime.now().timestamp())
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(String(500), nullable=True)
+    
+    # Indexes for faster queries
+    __table_args__ = (
+        Index('idx_active_connections_board_user', 'board_id', 'user_id'),
+        Index('idx_active_connections_heartbeat', 'last_heartbeat'),
+    )
+    
+    # Relationships - use backref for simpler circular references
+    board = relationship("Board", backref="active_connections_list")
+
+class UserToken(Base):
+    __tablename__ = "user_tokens"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(255), nullable=False)
+    board_id = Column(String(6), ForeignKey("boards.board_id"), nullable=False)
+    token = Column(String(255), nullable=False, unique=True)
+    created_at = Column(Float, default=lambda: datetime.now().timestamp())
+    expires_at = Column(Float, nullable=True)
+    is_revoked = Column(Boolean, default=False)
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_user_tokens_user_board', 'user_id', 'board_id'),
+        Index('idx_user_tokens_token', 'token'),
+    )
+    
+    # Relationships - use backref
+    board = relationship("Board", backref="user_tokens_list")
+
+class RateLimit(Base):
+    __tablename__ = "rate_limits"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(255), nullable=False)
+    board_id = Column(String(6), ForeignKey("boards.board_id"), nullable=False)
+    action_type = Column(String(50), nullable=False)
+    points = Column(Integer, default=0)
+    window_start = Column(Float, nullable=False)
+    window_seconds = Column(Integer, default=60)
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_rate_limits_user_board', 'user_id', 'board_id', 'action_type'),
+        Index('idx_rate_limits_window', 'window_start'),
+    )
+    
+    # Relationships - use backref
+    board = relationship("Board", backref="rate_limits_list")
+
+class AdminTimer(Base):
+    __tablename__ = "admin_timers"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    board_id = Column(String(6), ForeignKey("boards.board_id"), nullable=False, unique=True)
+    admin_disconnected_at = Column(Float, nullable=False)
+    scheduled_shutdown_at = Column(Float, nullable=False)
+    is_active = Column(Boolean, default=True)
+    
+    # Relationships - use backref
+    board = relationship("Board", backref=backref("admin_timer_instance", uselist=False))
+
+class ConnectionState(Base):
+    __tablename__ = "connection_states"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(255), nullable=False)
+    board_id = Column(String(6), ForeignKey("boards.board_id"), nullable=False)
+    cursor_x = Column(Float, default=0)
+    cursor_y = Column(Float, default=0)
+    active_tool = Column(String(20), default="pen")
+    last_activity = Column(Float, default=lambda: datetime.now().timestamp())
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_connection_states_user_board', 'user_id', 'board_id'),
+    )
+    
+    # Relationships - use backref
+    board = relationship("Board", backref="connection_states_list")
