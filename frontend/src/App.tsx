@@ -205,8 +205,8 @@ function App() {
               color: t.color,
               layer_id: t.layer_id,
               user_id: t.user_id,
-              fontSize: t.font_size || 16,
-              fontFamily: t.font_family || 'Arial'
+              font_size: t.font_size || 16,
+              font_family: t.font_family || 'Arial'
             }));
             setTextObjects(initialTexts);
           }
