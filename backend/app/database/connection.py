@@ -23,7 +23,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db():
     """Initialize database tables"""
     Base.metadata.create_all(bind=engine)
-    print(f"✅ Database initialized at {DB_PATH}")
+    print(f"Database initialized at {DB_PATH}")
 
 
 def get_db() -> Session:
