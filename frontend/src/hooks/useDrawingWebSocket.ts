@@ -23,6 +23,43 @@ export const useDrawingWebSocket = (
     const [isConnected, setIsConnected] = useState(false);
     const [undoStack, setUndoStack] = useState<Action[]>([]);
     const [redoStack, setRedoStack] = useState<Action[]>([]);
+    const pointBufferRef = useRef<Record<string, Point[]>>({});
+    const pointFlushTimerRef = useRef<number | null>(null);
+    const cursorTimerRef = useRef<number | null>(null);
+    const lastCursorSentAtRef = useRef<number>(0);
+    const pendingCursorRef = useRef<{ x: number; y: number; tool: string } | null>(null);
+
+    const POINT_FLUSH_MS = 33;
+    const CURSOR_THROTTLE_MS = 50;
+    const MAX_BUFFERED_AMOUNT = 256 * 1024;
+
+    const canSend = () => {
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        if (ws.bufferedAmount > MAX_BUFFERED_AMOUNT) return false;
+        return true;
+    };
+
+    const sendJson = (message: any) => {
+        if (!canSend()) return false;
+        try {
+            wsRef.current!.send(JSON.stringify(message));
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
+    const clearTimers = () => {
+        if (pointFlushTimerRef.current) {
+            window.clearTimeout(pointFlushTimerRef.current);
+            pointFlushTimerRef.current = null;
+        }
+        if (cursorTimerRef.current) {
+            window.clearTimeout(cursorTimerRef.current);
+            cursorTimerRef.current = null;
+        }
+    };
 
     const connect = useCallback((isCreating: boolean = false) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -76,13 +113,51 @@ export const useDrawingWebSocket = (
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
             setIsConnected(false);
+            clearTimers();
         };
 
         ws.onclose = (event) => {
             console.log('WebSocket disconnected', event.code, event.reason);
             setIsConnected(false);
+            clearTimers();
         };
     }, [boardId, onMessage, userId, userToken]);
+
+    const flushStrokePoints = useCallback(() => {
+        const scheduleFlush = () => {
+            if (pointFlushTimerRef.current) return;
+            pointFlushTimerRef.current = window.setTimeout(flushStrokePoints, POINT_FLUSH_MS);
+        };
+
+        pointFlushTimerRef.current = null;
+        if (!canSend()) {
+            scheduleFlush();
+            return;
+        }
+
+        const buffer = pointBufferRef.current;
+        Object.keys(buffer).forEach((strokeId) => {
+            const points = buffer[strokeId];
+            if (!points || points.length === 0) return;
+            buffer[strokeId] = [];
+
+            const message = {
+                type: 'stroke_points',
+                user_id: userId,
+                stroke_id: strokeId,
+                points: points.map(p => ({
+                    x: p.x,
+                    y: p.y,
+                    pressure: p.pressure,
+                    timestamp: p.timestamp
+                }))
+            };
+            if (!sendJson(message)) {
+                buffer[strokeId] = [...points, ...(buffer[strokeId] || [])];
+                scheduleFlush();
+            }
+        });
+    }, [userId]);
 
     const sendStrokeStart = useCallback((stroke: Omit<Stroke, 'id' | 'createdAt'>) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -98,37 +173,48 @@ export const useDrawingWebSocket = (
                     user_id: userId,
                 }
             };
-            wsRef.current.send(JSON.stringify(message));
+            sendJson(message);
             return strokeId;
         }
         return null;
     }, [userId]);
 
     const sendStrokePoints = useCallback((strokeId: string, points: Point[]) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-            const message = {
-                type: 'stroke_points',
-                user_id: userId,
-                stroke_id: strokeId,
-                points: points.map(p => ({
-                    x: p.x,
-                    y: p.y,
-                    pressure: p.pressure,
-                    timestamp: p.timestamp
-                }))
-            };
-            wsRef.current.send(JSON.stringify(message));
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+        if (!pointBufferRef.current[strokeId]) {
+            pointBufferRef.current[strokeId] = [];
         }
-    }, [userId]);
+        pointBufferRef.current[strokeId].push(...points);
+        if (!pointFlushTimerRef.current) {
+            pointFlushTimerRef.current = window.setTimeout(flushStrokePoints, POINT_FLUSH_MS);
+        }
+    }, [flushStrokePoints]);
 
     const sendStrokeEnd = useCallback((strokeId: string) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
+            // Flush remaining points for this stroke first
+            if (pointBufferRef.current[strokeId]?.length) {
+                const points = pointBufferRef.current[strokeId];
+                pointBufferRef.current[strokeId] = [];
+                const pointsMessage = {
+                    type: 'stroke_points',
+                    user_id: userId,
+                    stroke_id: strokeId,
+                    points: points.map(p => ({
+                        x: p.x,
+                        y: p.y,
+                        pressure: p.pressure,
+                        timestamp: p.timestamp
+                    }))
+                };
+                sendJson(pointsMessage);
+            }
             const message = {
                 type: 'stroke_end',
                 user_id: userId,
                 stroke_id: strokeId
             };
-            wsRef.current.send(JSON.stringify(message));
+            sendJson(message);
         }
     }, [userId]);
 
@@ -139,7 +225,7 @@ export const useDrawingWebSocket = (
                 user_id: userId,
                 shape: shape
             };
-            wsRef.current.send(JSON.stringify(message));
+            sendJson(message);
 
             // Track for undo
             setUndoStack(prev => [...prev, {
@@ -167,7 +253,7 @@ export const useDrawingWebSocket = (
                     font_family: 'Arial'
                 }
             };
-            wsRef.current.send(JSON.stringify(message));
+            sendJson(message);
 
             // Track for undo
             setUndoStack(prev => [...prev, {
@@ -191,7 +277,7 @@ export const useDrawingWebSocket = (
                     timestamp: p.timestamp
                 }))
             };
-            wsRef.current.send(JSON.stringify(message));
+            sendJson(message);
         }
     }, [userId]);
 
@@ -204,7 +290,7 @@ export const useDrawingWebSocket = (
                 action_id: lastAction.id,
                 action_type: lastAction.type
             };
-            wsRef.current.send(JSON.stringify(message));
+            sendJson(message);
 
             // Move to redo stack
             setRedoStack(prev => [...prev, lastAction]);
@@ -216,7 +302,7 @@ export const useDrawingWebSocket = (
         if (wsRef.current?.readyState === WebSocket.OPEN && redoStack.length > 0) {
             const lastRedoAction = redoStack[redoStack.length - 1];
             // Resend the original action
-            wsRef.current.send(JSON.stringify(lastRedoAction.data));
+            sendJson(lastRedoAction.data);
 
             // Move back to undo stack
             setUndoStack(prev => [...prev, lastRedoAction]);
@@ -225,15 +311,40 @@ export const useDrawingWebSocket = (
     }, [redoStack]);
 
     const sendCursorUpdate = useCallback((x: number, y: number, tool: string) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-            const message = {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+        pendingCursorRef.current = { x, y, tool };
+        const now = Date.now();
+        const elapsed = now - lastCursorSentAtRef.current;
+
+        const sendNow = () => {
+            const pending = pendingCursorRef.current;
+            if (!pending) return;
+            pendingCursorRef.current = null;
+            lastCursorSentAtRef.current = Date.now();
+            sendJson({
                 type: 'cursor_update',
                 user_id: userId,
-                x,
-                y,
-                tool
-            };
-            wsRef.current.send(JSON.stringify(message));
+                x: pending.x,
+                y: pending.y,
+                tool: pending.tool
+            });
+        };
+
+        if (elapsed >= CURSOR_THROTTLE_MS) {
+            if (cursorTimerRef.current) {
+                window.clearTimeout(cursorTimerRef.current);
+                cursorTimerRef.current = null;
+            }
+            sendNow();
+            return;
+        }
+
+        if (!cursorTimerRef.current) {
+            cursorTimerRef.current = window.setTimeout(() => {
+                cursorTimerRef.current = null;
+                sendNow();
+            }, CURSOR_THROTTLE_MS - elapsed);
         }
     }, [userId]);
 
@@ -243,6 +354,7 @@ export const useDrawingWebSocket = (
             wsRef.current = null;
         }
         setIsConnected(false);
+        clearTimers();
     }, []);
 
     useEffect(() => {

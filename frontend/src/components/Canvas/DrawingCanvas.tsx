@@ -2,31 +2,7 @@ import React from 'react';
 import { useRef, useState } from 'react';
 import { Stage, Layer, Line, Rect, Circle, Arrow, Text } from 'react-konva';
 import { Point, Stroke, ToolType } from '../../types/drawing';
-
-interface Shape {
-    id: string;
-    type: string;
-    start_x: number;
-    start_y: number;
-    end_x: number;
-    end_y: number;
-    color: string;
-    stroke_width: number;
-    layer_id: string;
-    user_id: string;
-}
-
-interface TextObject {
-    id: string;
-    text: string;
-    x: number;
-    y: number;
-    color: string;
-    layer_id: string;
-    user_id: string;
-    font_size: number;
-    font_family: string;
-}
+import { Shape, TextObject } from '../../types/boardObjects';
 
 interface DrawingCanvasProps {
     width: number;
