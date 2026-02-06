@@ -152,8 +152,15 @@ function App() {
         if (message.board_state) {
           const boardState = message.board_state;
 
-          // Set users
-          setUsers(boardState.users || []);
+          setUsers((boardState.users || []).map((u: any) => ({
+            id: u.id,
+            nickname: u.nickname,
+            role: u.role,
+            cursorX: u.cursor_x ?? 0,
+            cursorY: u.cursor_y ?? 0,
+            activeTool: u.active_tool ?? 'pen',
+            color: u.color ?? '#000000'
+          })));
 
           // Set object count
           setObjectCount(boardState.object_count || 0);
