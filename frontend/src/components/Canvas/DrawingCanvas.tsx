@@ -205,8 +205,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                 height={height}
                 ref={stageRef}
                 onMouseDown={handleMouseDown}
-                onMousemove={handleMouseMove}
-                onMouseup={handleMouseUp}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseUp}
             >
                 <Layer>

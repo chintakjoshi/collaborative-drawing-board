@@ -38,6 +38,7 @@ function App() {
   // Board state
   const [boardId, setBoardId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string>('');
+  const [userToken, setUserToken] = useState<string | null>(null);
   const [joinCode, setJoinCode] = useState('');
   const [connectionError, setConnectionError] = useState<string>('');
   const [isConnecting, setIsConnecting] = useState(false);
@@ -81,7 +82,7 @@ function App() {
     isConnected,
     canUndo,
     canRedo
-  } = useDrawingWebSocket(boardId, userId, handleWebSocketMessage);
+  } = useDrawingWebSocket(boardId, userId, handleWebSocketMessage, userToken);
 
   // Load session from localStorage on mount
   useEffect(() => {
@@ -94,6 +95,7 @@ function App() {
       console.log('Restoring session:', { savedBoardId, savedUserId, savedIsAdmin });
       setBoardId(savedBoardId);
       setUserId(savedUserId);
+      setUserToken(savedToken);
       setIsAdmin(savedIsAdmin);
       setIsConnecting(true);
       localStorage.setItem('isCreating', 'false');
@@ -137,6 +139,7 @@ function App() {
 
         setUserId(receivedUserId);
         setBoardId(receivedBoardId);
+        setUserToken(receivedToken);
         setIsAdmin(receivedRole === 'admin');
 
         // Save to localStorage for persistence
@@ -421,6 +424,7 @@ function App() {
     disconnect();
     setBoardId(null);
     setUserId('');
+    setUserToken(null);
     setIsAdmin(false);
     setUsers([]);
     setStrokes([]);

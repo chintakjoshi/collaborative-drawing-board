@@ -1,8 +1,7 @@
 from sqlalchemy.orm import Session
-from .models import Board, User, Stroke, StrokePoint, Shape, TextObject, Layer, BannedToken, Timeout
+from .models import ActiveConnection, AdminTimer, Board, ConnectionState, RateLimit, User, Stroke, StrokePoint, Shape, TextObject, Layer, BannedToken, Timeout, UserToken
 from typing import List, Optional, Dict
 import time
-
 
 class DatabaseService:
     """Service layer for database operations"""
@@ -189,16 +188,20 @@ class DatabaseService:
         if not board:
             return None
         
-        # Get users
-        users = DatabaseService.get_board_users(db, board_id, connected_only=True)
+        # Get users - use the relationship defined in Board
+        users = board.users
+        
+        # Get active connections
+        active_connections = board.active_connections_list
+        
+        # Get connection states
+        connection_states = board.connection_states_list
         
         # Get strokes with points
-        strokes = db.query(Stroke).filter(Stroke.board_id == board_id).all()
+        strokes = board.strokes
         strokes_data = []
         for stroke in strokes:
-            points = db.query(StrokePoint).filter(
-                StrokePoint.stroke_id == stroke.stroke_id
-            ).order_by(StrokePoint.point_order).all()
+            points = stroke.points
             
             strokes_data.append({
                 "id": stroke.stroke_id,
@@ -219,7 +222,7 @@ class DatabaseService:
             })
         
         # Get shapes
-        shapes = db.query(Shape).filter(Shape.board_id == board_id).all()
+        shapes = board.shapes
         shapes_data = [
             {
                 "id": s.shape_id,
@@ -237,7 +240,7 @@ class DatabaseService:
         ]
         
         # Get texts
-        texts = db.query(TextObject).filter(TextObject.board_id == board_id).all()
+        texts = board.texts
         texts_data = [
             {
                 "id": t.text_id,
@@ -254,7 +257,7 @@ class DatabaseService:
         ]
         
         # Get layers
-        layers = db.query(Layer).filter(Layer.board_id == board_id).order_by(Layer.order).all()
+        layers = board.layers
         layers_data = [
             {
                 "id": l.layer_id,
@@ -264,11 +267,18 @@ class DatabaseService:
             } for l in layers
         ]
         
-        # Calculate object count
-        object_count = len(strokes) + len(shapes) + len(texts)
+        # Get banned tokens
+        banned_tokens = board.banned_tokens
+        
+        # Get timeouts
+        timeouts = board.timeouts
         
         # Check if admin is online
         admin_online = any(u.user_id == board.admin_id and u.connected for u in users)
+        
+        # Get admin timer if exists
+        admin_timer = board.admin_timer_instance
+        admin_disconnected_at = admin_timer.admin_disconnected_at if admin_timer else None
         
         return {
             "board_id": board.board_id,
@@ -288,11 +298,11 @@ class DatabaseService:
             "shapes": shapes_data,
             "texts": texts_data,
             "layers": layers_data,
-            "object_count": object_count,
+            "object_count": board.object_count,
             "max_objects": board.max_objects,
             "max_users": board.max_users,
             "admin_online": admin_online,
-            "admin_disconnected_at": board.admin_disconnected_at,
+            "admin_disconnected_at": admin_disconnected_at,
             "created_at": board.created_at
         }
     
@@ -337,3 +347,251 @@ class DatabaseService:
         shape_count = db.query(Shape).filter(Shape.board_id == board_id).count()
         text_count = db.query(TextObject).filter(TextObject.board_id == board_id).count()
         return stroke_count + shape_count + text_count
+
+    @staticmethod
+    def create_user_token(db: Session, user_id: str, board_id: str, expires_in: int = None) -> str:
+        """Create a new JWT-like token for user"""
+        import secrets
+        
+        token = secrets.token_urlsafe(32)
+        expires_at = None
+        if expires_in:
+            expires_at = time.time() + expires_in
+            
+        user_token = UserToken(
+            user_id=user_id,
+            board_id=board_id,
+            token=token,
+            expires_at=expires_at
+        )
+        db.add(user_token)
+        db.commit()
+        return token
+
+    @staticmethod
+    def validate_user_token(db: Session, token: str, board_id: str) -> Optional[str]:
+        """Validate token and return user_id if valid"""
+        user_token = db.query(UserToken).filter(
+            UserToken.token == token,
+            UserToken.board_id == board_id,
+            UserToken.is_revoked == False
+        ).first()
+        
+        if not user_token:
+            return None
+            
+        # Check expiration
+        if user_token.expires_at and user_token.expires_at < time.time():
+            return None
+            
+        return user_token.user_id
+
+    @staticmethod
+    def revoke_user_token(db: Session, token: str):
+        """Revoke a token (for logout or ban)"""
+        user_token = db.query(UserToken).filter(UserToken.token == token).first()
+        if user_token:
+            user_token.is_revoked = True
+            db.commit()
+
+    @staticmethod
+    def add_active_connection(db: Session, board_id: str, user_id: str, 
+                            websocket_id: str = None, ip_address: str = None, 
+                            user_agent: str = None):
+        """Add or update active connection"""
+        # Remove any existing connection for this user (only one connection per user)
+        db.query(ActiveConnection).filter(
+            ActiveConnection.board_id == board_id,
+            ActiveConnection.user_id == user_id
+        ).delete()
+        
+        connection = ActiveConnection(
+            board_id=board_id,
+            user_id=user_id,
+            websocket_id=websocket_id,
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
+        db.add(connection)
+        db.commit()
+
+    @staticmethod
+    def update_connection_heartbeat(db: Session, board_id: str, user_id: str):
+        """Update last heartbeat timestamp"""
+        connection = db.query(ActiveConnection).filter(
+            ActiveConnection.board_id == board_id,
+            ActiveConnection.user_id == user_id
+        ).first()
+        
+        if connection:
+            connection.last_heartbeat = time.time()
+            db.commit()
+
+    @staticmethod
+    def remove_active_connection(db: Session, board_id: str, user_id: str):
+        """Remove active connection"""
+        db.query(ActiveConnection).filter(
+            ActiveConnection.board_id == board_id,
+            ActiveConnection.user_id == user_id
+        ).delete()
+        db.commit()
+
+    @staticmethod
+    def get_active_connections_count(db: Session, board_id: str) -> int:
+        """Get count of active connections for a board"""
+        return db.query(ActiveConnection).filter(
+            ActiveConnection.board_id == board_id
+        ).count()
+
+    @staticmethod
+    def get_active_users(db: Session, board_id: str) -> List[str]:
+        """Get list of user_ids with active connections"""
+        connections = db.query(ActiveConnection).filter(
+            ActiveConnection.board_id == board_id
+        ).all()
+        return [conn.user_id for conn in connections]
+
+    @staticmethod
+    def cleanup_stale_connections(db: Session, timeout_seconds: int = 30):
+        """Remove connections with stale heartbeats"""
+        cutoff = time.time() - timeout_seconds
+        db.query(ActiveConnection).filter(
+            ActiveConnection.last_heartbeat < cutoff
+        ).delete()
+        db.commit()
+
+    @staticmethod
+    def check_rate_limit(db: Session, user_id: str, board_id: str, 
+                        action_type: str, points: int = 1) -> bool:
+        """Check and update rate limit"""
+        now = time.time()
+        window_seconds = 60
+        
+        # Find or create rate limit record
+        rate_limit = db.query(RateLimit).filter(
+            RateLimit.user_id == user_id,
+            RateLimit.board_id == board_id,
+            RateLimit.action_type == action_type
+        ).first()
+        
+        if not rate_limit:
+            rate_limit = RateLimit(
+                user_id=user_id,
+                board_id=board_id,
+                action_type=action_type,
+                points=0,
+                window_start=now
+            )
+            db.add(rate_limit)
+        
+        # Check if window has expired
+        if now - rate_limit.window_start > window_seconds:
+            rate_limit.points = 0
+            rate_limit.window_start = now
+        
+        # Check limit (1000 points per minute)
+        if rate_limit.points + points > 1000:
+            return False
+        
+        # Update points
+        rate_limit.points += points
+        db.commit()
+        return True
+
+    @staticmethod
+    def create_admin_timer(db: Session, board_id: str):
+        """Create admin disconnect timer"""
+        now = time.time()
+        admin_timer = db.query(AdminTimer).filter(
+            AdminTimer.board_id == board_id
+        ).first()
+
+        if admin_timer:
+            admin_timer.admin_disconnected_at = now
+            admin_timer.scheduled_shutdown_at = now + 600  # 10 minutes
+            admin_timer.is_active = True
+        else:
+            admin_timer = AdminTimer(
+                board_id=board_id,
+                admin_disconnected_at=now,
+                scheduled_shutdown_at=now + 600,  # 10 minutes
+                is_active=True
+            )
+            db.add(admin_timer)
+
+        db.commit()
+
+    @staticmethod
+    def cancel_admin_timer(db: Session, board_id: str):
+        """Cancel admin disconnect timer"""
+        admin_timer = db.query(AdminTimer).filter(
+            AdminTimer.board_id == board_id,
+            AdminTimer.is_active == True
+        ).first()
+        
+        if admin_timer:
+            admin_timer.is_active = False
+            db.commit()
+
+    @staticmethod
+    def get_expired_admin_timers(db: Session) -> List[AdminTimer]:
+        """Get timers that have expired"""
+        now = time.time()
+        return db.query(AdminTimer).filter(
+            AdminTimer.is_active == True,
+            AdminTimer.scheduled_shutdown_at <= now
+        ).all()
+
+    @staticmethod
+    def update_connection_state(db: Session, board_id: str, user_id: str, 
+                            cursor_x: float = None, cursor_y: float = None, 
+                            active_tool: str = None):
+        """Update user's connection state (cursor position, tool)"""
+        state = db.query(ConnectionState).filter(
+            ConnectionState.board_id == board_id,
+            ConnectionState.user_id == user_id
+        ).first()
+        
+        if not state:
+            state = ConnectionState(
+                board_id=board_id,
+                user_id=user_id,
+                cursor_x=cursor_x or 0,
+                cursor_y=cursor_y or 0,
+                active_tool=active_tool or "pen"
+            )
+            db.add(state)
+        else:
+            if cursor_x is not None:
+                state.cursor_x = cursor_x
+            if cursor_y is not None:
+                state.cursor_y = cursor_y
+            if active_tool is not None:
+                state.active_tool = active_tool
+            state.last_activity = time.time()
+        
+        db.commit()
+
+    @staticmethod
+    def update_board_activity(db: Session, board_id: str):
+        """Update board's last activity timestamp"""
+        board = DatabaseService.get_board(db, board_id)
+        if board:
+            board.last_activity = time.time()
+            db.commit()
+
+    @staticmethod
+    def increment_object_count(db: Session, board_id: str):
+        """Increment board's object count"""
+        board = DatabaseService.get_board(db, board_id)
+        if board:
+            board.object_count += 1
+            db.commit()
+
+    @staticmethod
+    def decrement_object_count(db: Session, board_id: str):
+        """Decrement board's object count"""
+        board = DatabaseService.get_board(db, board_id)
+        if board and board.object_count > 0:
+            board.object_count -= 1
+            db.commit()
