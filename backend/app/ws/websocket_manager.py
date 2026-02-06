@@ -237,7 +237,7 @@ class WebSocketManager:
                             "width": stroke_data.get("width", 5)
                         },
                         "timestamp": time.time()
-                    }, exclude_user=user_id)
+                    })
                         
                 elif event_type == "stroke_points":
                     stroke_id = data.get("stroke_id")
@@ -252,7 +252,7 @@ class WebSocketManager:
                         "stroke_id": stroke_id,
                         "points": points_data,
                         "timestamp": time.time()
-                    }, exclude_user=user_id)
+                    })
                     
                 elif event_type == "stroke_end":
                     stroke_id = data.get("stroke_id")
@@ -261,7 +261,7 @@ class WebSocketManager:
                         "stroke_id": stroke_id,
                         "user_id": user_id,
                         "timestamp": time.time()
-                    }, exclude_user=user_id)
+                    })
                 
                 # ============= SHAPE EVENTS =============
                 elif event_type == "shape_create":
