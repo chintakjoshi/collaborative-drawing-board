@@ -1,9 +1,8 @@
 # websocket_manager.py - UPDATED VERSION
-import asyncio
 import secrets
 import string
 import time
-from typing import Dict, List, Optional
+from typing import Optional
 from fastapi import WebSocket
 from app.database import get_db, DatabaseService
 from app.database.models import User, UserToken
@@ -39,7 +38,7 @@ class WebSocketManager:
         for db in get_db():
             try:
                 # Create board in database
-                board = DatabaseService.create_board(db, board_id, admin_id)
+                DatabaseService.create_board(db, board_id, admin_id)
                 
                 # Generate admin nickname
                 admin_nickname = f"Admin{board_id[:4]}"

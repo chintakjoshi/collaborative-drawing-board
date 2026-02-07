@@ -7,7 +7,7 @@ import asyncio
 
 from app.ws.websocket_manager import WebSocketManager
 from app.ws.connection_manager import ConnectionManager
-from app.database import init_db, get_db, DatabaseService
+from app.database import init_db, DatabaseService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -176,7 +176,7 @@ async def websocket_create_endpoint(websocket: WebSocket):
             })
         try:
             await websocket.close()
-        except:
+        except Exception:
             pass
 
 @app.websocket("/ws/join/{board_id}")
@@ -340,7 +340,7 @@ async def websocket_join_endpoint(websocket: WebSocket, board_id: str):
                 })
         try:
             await websocket.close()
-        except:
+        except Exception:
             pass
 
 if __name__ == "__main__":
