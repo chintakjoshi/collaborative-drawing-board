@@ -32,7 +32,7 @@ class DatabaseService:
     @staticmethod
     def get_board(db: Session, board_id: str) -> Optional[Board]:
         """Get board by ID"""
-        return db.query(Board).filter(Board.board_id == board_id, Board.is_active == True).first()
+        return db.query(Board).filter(Board.board_id == board_id, Board.is_active).first()
     
     @staticmethod
     def add_user(db: Session, user_id: str, board_id: str, nickname: str, role: str = "user") -> User:
@@ -54,7 +54,7 @@ class DatabaseService:
         """Get all users for a board"""
         query = db.query(User).filter(User.board_id == board_id)
         if connected_only:
-            query = query.filter(User.connected == True)
+            query = query.filter(User.connected)
         return query.all()
     
     @staticmethod
@@ -191,12 +191,6 @@ class DatabaseService:
         # Get users - use the relationship defined in Board
         users = board.users
         
-        # Get active connections
-        active_connections = board.active_connections_list
-        
-        # Get connection states
-        connection_states = board.connection_states_list
-        
         # Get strokes with points
         strokes = board.strokes
         strokes_data = []
@@ -260,18 +254,12 @@ class DatabaseService:
         layers = board.layers
         layers_data = [
             {
-                "id": l.layer_id,
-                "name": l.name,
-                "hidden": l.hidden,
-                "order": l.order
-            } for l in layers
+                "id": layer.layer_id,
+                "name": layer.name,
+                "hidden": layer.hidden,
+                "order": layer.order
+            } for layer in layers
         ]
-        
-        # Get banned tokens
-        banned_tokens = board.banned_tokens
-        
-        # Get timeouts
-        timeouts = board.timeouts
         
         # Check if admin is online
         admin_online = any(u.user_id == board.admin_id and u.connected for u in users)
@@ -374,7 +362,7 @@ class DatabaseService:
         user_token = db.query(UserToken).filter(
             UserToken.token == token,
             UserToken.board_id == board_id,
-            UserToken.is_revoked == False
+            UserToken.is_revoked.is_(False)
         ).first()
         
         if not user_token:
@@ -526,7 +514,7 @@ class DatabaseService:
         """Cancel admin disconnect timer"""
         admin_timer = db.query(AdminTimer).filter(
             AdminTimer.board_id == board_id,
-            AdminTimer.is_active == True
+            AdminTimer.is_active
         ).first()
         
         if admin_timer:
@@ -538,7 +526,7 @@ class DatabaseService:
         """Get timers that have expired"""
         now = time.time()
         return db.query(AdminTimer).filter(
-            AdminTimer.is_active == True,
+            AdminTimer.is_active,
             AdminTimer.scheduled_shutdown_at <= now
         ).all()
 
