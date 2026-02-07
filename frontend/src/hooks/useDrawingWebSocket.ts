@@ -33,14 +33,14 @@ export const useDrawingWebSocket = (
     const CURSOR_THROTTLE_MS = 50;
     const MAX_BUFFERED_AMOUNT = 256 * 1024;
 
-    const canSend = () => {
+    const canSend = useCallback(() => {
         const ws = wsRef.current;
         if (!ws || ws.readyState !== WebSocket.OPEN) return false;
         if (ws.bufferedAmount > MAX_BUFFERED_AMOUNT) return false;
         return true;
-    };
+    }, [MAX_BUFFERED_AMOUNT]);
 
-    const sendJson = (message: any) => {
+    const sendJson = useCallback((message: any) => {
         if (!canSend()) return false;
         try {
             wsRef.current!.send(JSON.stringify(message));
@@ -48,7 +48,7 @@ export const useDrawingWebSocket = (
         } catch {
             return false;
         }
-    };
+    }, [canSend]);
 
     const clearTimers = () => {
         if (pointFlushTimerRef.current) {
@@ -157,7 +157,7 @@ export const useDrawingWebSocket = (
                 scheduleFlush();
             }
         });
-    }, [userId]);
+    }, [canSend, sendJson, userId]);
 
     const sendStrokeStart = useCallback((stroke: Omit<Stroke, 'id' | 'createdAt'>) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -177,7 +177,7 @@ export const useDrawingWebSocket = (
             return strokeId;
         }
         return null;
-    }, [userId]);
+    }, [sendJson, userId]);
 
     const sendStrokePoints = useCallback((strokeId: string, points: Point[]) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -216,7 +216,7 @@ export const useDrawingWebSocket = (
             };
             sendJson(message);
         }
-    }, [userId]);
+    }, [sendJson, userId]);
 
     const sendShapeCreate = useCallback((shape: any) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -236,7 +236,7 @@ export const useDrawingWebSocket = (
             }]);
             setRedoStack([]);
         }
-    }, [userId]);
+    }, [sendJson, userId]);
 
     const sendTextCreate = useCallback((text: string, point: Point, layerId: string) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -264,7 +264,7 @@ export const useDrawingWebSocket = (
             }]);
             setRedoStack([]);
         }
-    }, [userId]);
+    }, [sendJson, userId]);
 
     const sendErasePath = useCallback((points: Point[]) => {
         if (wsRef.current?.readyState === WebSocket.OPEN && points.length > 0) {
@@ -279,7 +279,7 @@ export const useDrawingWebSocket = (
             };
             sendJson(message);
         }
-    }, [userId]);
+    }, [sendJson, userId]);
 
     const sendUndo = useCallback(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN && undoStack.length > 0) {
@@ -296,7 +296,7 @@ export const useDrawingWebSocket = (
             setRedoStack(prev => [...prev, lastAction]);
             setUndoStack(prev => prev.slice(0, -1));
         }
-    }, [undoStack, userId]);
+    }, [sendJson, undoStack, userId]);
 
     const sendRedo = useCallback(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN && redoStack.length > 0) {
@@ -308,7 +308,7 @@ export const useDrawingWebSocket = (
             setUndoStack(prev => [...prev, lastRedoAction]);
             setRedoStack(prev => prev.slice(0, -1));
         }
-    }, [redoStack]);
+    }, [redoStack, sendJson]);
 
     const sendCursorUpdate = useCallback((x: number, y: number, tool: string) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -346,7 +346,7 @@ export const useDrawingWebSocket = (
                 sendNow();
             }, CURSOR_THROTTLE_MS - elapsed);
         }
-    }, [userId]);
+    }, [sendJson, userId]);
 
     const disconnect = useCallback(() => {
         if (wsRef.current) {
