@@ -1,0 +1,88 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
+
+.landing-page {
+  --landing-bg-1: #eef4ff;
+  --landing-bg-2: #e9fdfa;
+  --landing-bg-3: #fff6e7;
+  background:
+    radial-gradient(circle at 12% 15%, var(--landing-bg-2) 0%, transparent 42%),
+    radial-gradient(circle at 88% 82%, var(--landing-bg-3) 0%, transparent 38%),
+    linear-gradient(140deg, #f8fbff 0%, var(--landing-bg-1) 48%, #f4fffb 100%);
+  font-family: 'Sora', 'Segoe UI', sans-serif;
+}
+
+.landing-grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(15, 23, 42, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.04) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(circle at center, black 42%, transparent 88%);
+  pointer-events: none;
+}
+
+.landing-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(16px);
+  opacity: 0.52;
+  pointer-events: none;
+  animation: float 10s ease-in-out infinite;
+}
+
+.landing-orb-1 {
+  width: 340px;
+  height: 340px;
+  top: -80px;
+  right: -110px;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.55), rgba(59, 130, 246, 0.14));
+}
+
+.landing-orb-2 {
+  width: 300px;
+  height: 300px;
+  bottom: -120px;
+  left: -70px;
+  background: radial-gradient(circle, rgba(251, 191, 36, 0.5), rgba(251, 146, 60, 0.12));
+  animation-delay: -3s;
+}
+
+.landing-fade-up {
+  animation: fadeUp 600ms cubic-bezier(0.18, 0.75, 0.24, 1) both;
+}
+
+.join-code-input {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+.feature-tile {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 0.9rem;
+  background: rgba(248, 250, 252, 0.7);
+  padding: 0.85rem 0.9rem;
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

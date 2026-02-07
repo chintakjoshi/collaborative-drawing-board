@@ -1,6 +1,6 @@
 import React from 'react';
 import { User } from '../../types/drawing';
-import { FiUser, FiFrown } from 'react-icons/fi';
+import { FiShield, FiUser } from 'react-icons/fi';
 
 interface UserListProps {
     users: User[];
@@ -16,29 +16,29 @@ export const UserList: React.FC<UserListProps> = ({
     onKickUser
 }) => {
     return (
-        <div className="bg-white rounded-lg shadow p-4">
-            <h3 className="font-semibold text-lg mb-3">Users ({users.length}/10)</h3>
-            <div className="space-y-2">
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <h3 className="font-bold text-lg mb-3 text-slate-900">Users ({users.length}/10)</h3>
+            <div className="space-y-2.5">
                 {users.map((user) => (
                     <div
                         key={user.id}
-                        className="flex items-center justify-between p-2 rounded hover:bg-gray-50"
+                        className="flex items-center justify-between p-2.5 rounded-lg border border-transparent hover:border-slate-200 hover:bg-slate-50"
                     >
                         <div className="flex items-center space-x-3">
                             <div className="relative">
-                                <FiUser className="w-6 h-6 text-gray-400" />
+                                <FiUser className="w-5 h-5 text-slate-400" />
                                 {user.role === 'admin' && (
-                                    <FiFrown className="absolute -top-1 -right-1 w-3 h-3 text-yellow-500" />
+                                    <FiShield className="absolute -top-1 -right-1 w-3 h-3 text-amber-500" />
                                 )}
                             </div>
                             <div>
-                                <div className="font-medium">
+                                <div className="font-semibold text-slate-900">
                                     {user.nickname}
                                     {user.id === currentUserId && (
-                                        <span className="ml-2 text-xs text-blue-500">(You)</span>
+                                        <span className="ml-2 text-xs text-cyan-600">(You)</span>
                                     )}
                                 </div>
-                                <div className="text-xs text-gray-500 capitalize">
+                                <div className="text-xs text-slate-500 capitalize">
                                     {user.activeTool}
                                 </div>
                             </div>
@@ -46,13 +46,13 @@ export const UserList: React.FC<UserListProps> = ({
 
                         <div className="flex items-center">
                             <div
-                                className="w-3 h-3 rounded-full mr-2"
+                                className="w-3 h-3 rounded-full mr-2 border border-slate-300"
                                 style={{ backgroundColor: user.color }}
                             />
                             {isAdmin && user.id !== currentUserId && (
                                 <button
                                     onClick={() => onKickUser?.(user.id)}
-                                    className="text-xs text-red-500 hover:text-red-700"
+                                    className="text-xs text-rose-600 hover:text-rose-700 font-medium"
                                 >
                                     Kick
                                 </button>

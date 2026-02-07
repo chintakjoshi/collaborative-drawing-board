@@ -1,4 +1,4 @@
-import { useCallback, MutableRefObject } from 'react';
+import { useCallback, MutableRefObject, useEffect, useRef } from 'react';
 import { Shape, TextObject } from '../types/boardObjects';
 import { Stroke, User } from '../types/drawing';
 
@@ -39,6 +39,52 @@ export const useBoardWebSocketHandler = ({
   hasReceivedWelcomeRef,
   handleCompleteDisconnect
 }: UseBoardWebSocketHandlerArgs) => {
+  const pendingCursorUpdatesRef = useRef<Record<string, { x: number; y: number; tool: User['activeTool'] }>>({});
+  const cursorFlushRafRef = useRef<number | null>(null);
+
+  const flushPendingCursorUpdates = useCallback(() => {
+    cursorFlushRafRef.current = null;
+    const pendingUpdates = pendingCursorUpdatesRef.current;
+    pendingCursorUpdatesRef.current = {};
+
+    const pendingUserIds = Object.keys(pendingUpdates);
+    if (pendingUserIds.length === 0) return;
+
+    setUsers((prev) => {
+      let changed = false;
+      const next = prev.map((user) => {
+        const nextCursor = pendingUpdates[user.id];
+        if (!nextCursor) return user;
+
+        if (
+          user.cursorX === nextCursor.x &&
+          user.cursorY === nextCursor.y &&
+          user.activeTool === nextCursor.tool
+        ) {
+          return user;
+        }
+
+        changed = true;
+        return {
+          ...user,
+          cursorX: nextCursor.x,
+          cursorY: nextCursor.y,
+          activeTool: nextCursor.tool
+        };
+      });
+
+      return changed ? next : prev;
+    });
+  }, [setUsers]);
+
+  useEffect(() => {
+    return () => {
+      if (cursorFlushRafRef.current !== null) {
+        window.cancelAnimationFrame(cursorFlushRafRef.current);
+      }
+    };
+  }, []);
+
   return useCallback((message: any) => {
     switch (message.type) {
       case 'welcome': {
@@ -269,17 +315,15 @@ export const useBoardWebSocketHandler = ({
         break;
 
       case 'cursor_update':
-        setUsers(prev => prev.map(user => {
-          if (user.id === message.user_id) {
-            return {
-              ...user,
-              cursorX: message.x,
-              cursorY: message.y,
-              activeTool: message.tool
-            };
-          }
-          return user;
-        }));
+        pendingCursorUpdatesRef.current[message.user_id] = {
+          x: message.x,
+          y: message.y,
+          tool: message.tool as User['activeTool']
+        };
+
+        if (cursorFlushRafRef.current === null) {
+          cursorFlushRafRef.current = window.requestAnimationFrame(flushPendingCursorUpdates);
+        }
         break;
 
       case 'session_ended':
@@ -318,6 +362,7 @@ export const useBoardWebSocketHandler = ({
     setUserId,
     setUserToken,
     setUsers,
+    flushPendingCursorUpdates,
     users
   ]);
 };

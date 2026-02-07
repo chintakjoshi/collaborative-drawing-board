@@ -22,7 +22,7 @@ interface DrawingCanvasProps {
     currentColor: string;
 }
 
-export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
+const DrawingCanvasComponent: React.FC<DrawingCanvasProps> = ({
     width,
     height,
     strokes,
@@ -175,17 +175,18 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     };
 
     return (
-        <div className="canvas-container bg-gray-50 border rounded-lg overflow-hidden relative">
+        <div className="canvas-container bg-white border border-slate-200 rounded-xl overflow-hidden relative shadow-[0_10px_30px_rgba(15,23,42,0.08)]">
             <Stage
                 width={width}
                 height={height}
+                pixelRatio={1}
                 ref={stageRef}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseUp}
             >
-                <Layer>
+                <Layer listening={false}>
                     {/* Render existing strokes */}
                     {strokes.map((stroke) => (
                         <Line
@@ -197,6 +198,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                             lineJoin="round"
                             tension={0.5}
                             opacity={stroke.brushType === 'highlighter' ? 0.3 : 1}
+                            perfectDrawEnabled={false}
+                            shadowForStrokeEnabled={false}
                         />
                     ))}
 
@@ -217,6 +220,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                                     height={height}
                                     stroke={shape.color}
                                     strokeWidth={shape.stroke_width}
+                                    perfectDrawEnabled={false}
                                 />
                             );
                         } else if (shape.type === 'circle') {
@@ -231,6 +235,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                                     radius={radius}
                                     stroke={shape.color}
                                     strokeWidth={shape.stroke_width}
+                                    perfectDrawEnabled={false}
                                 />
                             );
                         } else if (shape.type === 'line' || shape.type === 'arrow') {
@@ -243,6 +248,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                                     fill={shape.color}
                                     pointerLength={shape.type === 'arrow' ? 10 : 0}
                                     pointerWidth={shape.type === 'arrow' ? 10 : 0}
+                                    perfectDrawEnabled={false}
                                 />
                             );
                         }
@@ -259,6 +265,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                             fontSize={textObj.font_size || 16}
                             fontFamily={textObj.font_family || 'Arial'}
                             fill={textObj.color}
+                            perfectDrawEnabled={false}
                         />
                     ))}
 
@@ -272,6 +279,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                             lineJoin="round"
                             tension={0.5}
                             opacity={getOpacity(currentTool)}
+                            perfectDrawEnabled={false}
+                            shadowForStrokeEnabled={false}
                         />
                     )}
 
@@ -287,6 +296,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                                     stroke={currentColor}
                                     strokeWidth={getStrokeWidth(currentTool)}
                                     dash={[5, 5]}
+                                    perfectDrawEnabled={false}
                                 />
                             )}
                             {currentTool === 'circle' && (
@@ -300,6 +310,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                                     stroke={currentColor}
                                     strokeWidth={getStrokeWidth(currentTool)}
                                     dash={[5, 5]}
+                                    perfectDrawEnabled={false}
                                 />
                             )}
                             {(currentTool === 'line' || currentTool === 'arrow') && (
@@ -311,6 +322,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                                     pointerLength={currentTool === 'arrow' ? 10 : 0}
                                     pointerWidth={currentTool === 'arrow' ? 10 : 0}
                                     dash={[5, 5]}
+                                    perfectDrawEnabled={false}
                                 />
                             )}
                         </>
@@ -326,6 +338,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                             strokeWidth={1}
                             dash={[5, 5]}
                             fill="rgba(200, 200, 200, 0.3)"
+                            perfectDrawEnabled={false}
                         />
                     )}
                 </Layer>
@@ -335,7 +348,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             {textInput.visible && (
                 <input
                     type="text"
-                    className="absolute border-2 border-blue-500 bg-white p-2 rounded shadow-lg outline-none"
+                    className="absolute border-2 border-cyan-500 bg-white p-2 rounded-lg shadow-lg outline-none"
                     style={{
                         left: `${textInput.x}px`,
                         top: `${textInput.y}px`,
@@ -349,3 +362,25 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         </div>
     );
 };
+
+const areDrawingCanvasPropsEqual = (prev: DrawingCanvasProps, next: DrawingCanvasProps) => {
+  return (
+    prev.width === next.width &&
+    prev.height === next.height &&
+    prev.strokes === next.strokes &&
+    prev.shapes === next.shapes &&
+    prev.textObjects === next.textObjects &&
+    prev.currentTool === next.currentTool &&
+    prev.currentColor === next.currentColor &&
+    prev.onDrawStart === next.onDrawStart &&
+    prev.onDrawMove === next.onDrawMove &&
+    prev.onDrawEnd === next.onDrawEnd &&
+    prev.onShapeStart === next.onShapeStart &&
+    prev.onShapeUpdate === next.onShapeUpdate &&
+    prev.onShapeEnd === next.onShapeEnd &&
+    prev.onTextCreate === next.onTextCreate &&
+    prev.onErase === next.onErase
+  );
+};
+
+export const DrawingCanvas = React.memo(DrawingCanvasComponent, areDrawingCanvasPropsEqual);

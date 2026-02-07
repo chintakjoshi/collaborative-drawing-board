@@ -1,0 +1,24 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap');
+
+.board-page {
+  background:
+    radial-gradient(circle at 10% 15%, rgba(56, 189, 248, 0.12) 0%, transparent 34%),
+    radial-gradient(circle at 90% 82%, rgba(251, 191, 36, 0.1) 0%, transparent 30%),
+    linear-gradient(145deg, #f6f9ff 0%, #eef6ff 45%, #f4fdf8 100%);
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  position: relative;
+  overflow: hidden;
+}
+
+.board-page::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(to right, rgba(15, 23, 42, 0.022) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+
+.board-code {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+}

@@ -6,6 +6,7 @@ import { BoardStatusBar } from '../components/Board/BoardStatusBar';
 import { LimitWarningModal } from '../components/Board/LimitWarningModal';
 import { Layer, Point, Stroke, ToolType, User } from '../types/drawing';
 import { Shape, TextObject } from '../types/boardObjects';
+import './BoardPage.css';
 
 type TabKey = 'tools' | 'users' | 'layers' | 'admin';
 
@@ -97,7 +98,7 @@ export const BoardPage: React.FC<BoardPageProps> = ({
   onDismissLimitWarning
 }) => {
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col">
+    <div className="board-page h-screen overflow-hidden flex flex-col text-slate-900">
       <BoardHeader
         boardId={boardId}
         isAdmin={isAdmin}
@@ -107,7 +108,7 @@ export const BoardPage: React.FC<BoardPageProps> = ({
         onLeave={onLeave}
       />
 
-      <main className="flex-1 flex overflow-hidden">
+      <main className="relative z-10 flex-1 min-h-0 flex flex-col lg:flex-row gap-4 px-3 pb-3 sm:px-4 sm:pb-4 overflow-hidden">
         <BoardSidebar
           activeTab={activeTab}
           onTabChange={onTabChange}
